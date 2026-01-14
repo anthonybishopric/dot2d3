@@ -1,0 +1,22 @@
+// A simple digraph example
+digraph G {
+    // Default node attributes
+    node [shape=ellipse, color="#4a90d9"]
+
+    // Default edge attributes
+    edge [color="#666666"]
+
+    // Nodes with attributes
+    A [label="Start", color="#4caf50"]
+    B [label="Process", shape=box]
+    C [label="Decision", shape=diamond, color="#ff9800"]
+    D [label="End", color="#f44336"]
+    E [label="Loop Back"]
+
+    // Edges
+    A -> B [label="begin"]
+    B -> C
+    C -> D [label="yes", color="#4caf50"]
+    C -> E [label="no", color="#f44336"]
+    E -> B [style=dashed]
+}
