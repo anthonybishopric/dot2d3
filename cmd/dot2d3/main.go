@@ -93,6 +93,8 @@ func runServer(addr string) {
 }
 
 func handleIndex(w http.ResponseWriter, r *http.Request) {
+	// Shared links now always show the form with pre-populated content
+	// The JavaScript will decode URL params and fill in the form fields
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprint(w, `<!DOCTYPE html>
 <html>
@@ -190,6 +192,33 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
         color: #888;
         margin-top: 4px;
     }
+    .button-row {
+        display: flex;
+        gap: 10px;
+        margin-top: 12px;
+    }
+    .button-row button {
+        margin-top: 0;
+    }
+    .copy-link-btn {
+        background: #5cb85c;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }
+    .copy-link-btn:hover { background: #4cae4c; }
+    .copy-link-btn.copied { background: #337ab7; }
+    .copy-link-btn:disabled {
+        background: #ccc;
+        cursor: not-allowed;
+    }
+    .copy-feedback {
+        font-size: 12px;
+        color: #3c763d;
+        margin-top: 6px;
+        min-height: 18px;
+    }
+    .copy-feedback.error { color: #c9302c; }
 </style>
 </head>
 <body>
@@ -206,7 +235,17 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
             <label for="path">Path to Highlight (optional)</label>
             <textarea name="path" id="path" rows="4" placeholder="digraph { A -> B -> C }"></textarea>
             <div class="hint">Path edges highlighted in orange. Rest of graph is dimmed. Invalid nodes show in red.</div>
-            <button type="submit">Convert</button>
+            <div class="button-row">
+                <button type="submit">Convert</button>
+                <button type="button" class="copy-link-btn" id="copy-link-btn">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+                        <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+                    </svg>
+                    Copy Link
+                </button>
+            </div>
+            <div class="copy-feedback" id="copy-feedback"></div>
         </form>
         <details>
             <summary>API Usage</summary>
@@ -273,6 +312,100 @@ document.querySelector('form').addEventListener('submit', function(e) {
         iframe.srcdoc = '<div style="padding:20px;color:#c62828;">' + err.message + '</div>';
     });
 });
+
+// Pre-populate form from URL params (for when viewing shared link editor)
+function fromUrlSafeBase64(str) {
+    if (!str) return '';
+    try {
+        // Restore standard base64 characters
+        let s = str.replace(/-/g, '+').replace(/_/g, '/');
+        // Add padding if needed
+        while (s.length % 4) s += '=';
+        return decodeURIComponent(escape(atob(s)));
+    } catch (e) {
+        return '';
+    }
+}
+
+(function() {
+    const params = new URLSearchParams(window.location.search);
+    const graphB64 = params.get('g');
+    const pathB64 = params.get('p');
+
+    if (graphB64) {
+        const graphDOT = fromUrlSafeBase64(graphB64);
+        if (graphDOT) {
+            document.querySelector('textarea[name="graph"]').value = graphDOT;
+        }
+    }
+    if (pathB64) {
+        const pathDOT = fromUrlSafeBase64(pathB64);
+        if (pathDOT) {
+            document.querySelector('textarea[name="path"]').value = pathDOT;
+        }
+    }
+})();
+
+// Copy Link functionality
+const copyLinkBtn = document.getElementById('copy-link-btn');
+const copyFeedback = document.getElementById('copy-feedback');
+
+function toUrlSafeBase64(str) {
+    // Encode to base64, then make URL-safe
+    return btoa(unescape(encodeURIComponent(str)))
+        .replace(/\+/g, '-')
+        .replace(/\//g, '_')
+        .replace(/=+$/, '');
+}
+
+copyLinkBtn.addEventListener('click', async function() {
+    const graphDOT = document.querySelector('textarea[name="graph"]').value;
+    const pathDOT = document.querySelector('textarea[name="path"]').value;
+
+    if (!graphDOT.trim()) {
+        copyFeedback.textContent = 'Please enter a graph first';
+        copyFeedback.className = 'copy-feedback error';
+        return;
+    }
+
+    // Build shareable URL
+    const params = new URLSearchParams();
+    params.set('g', toUrlSafeBase64(graphDOT));
+    if (pathDOT.trim()) {
+        params.set('p', toUrlSafeBase64(pathDOT));
+    }
+
+    const shareURL = window.location.origin + '/?' + params.toString();
+
+    try {
+        await navigator.clipboard.writeText(shareURL);
+        copyLinkBtn.classList.add('copied');
+        copyLinkBtn.innerHTML = ` + "`" + `
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="20 6 9 17 4 12"></polyline>
+            </svg>
+            Copied!
+        ` + "`" + `;
+        copyFeedback.textContent = 'Link copied to clipboard';
+        copyFeedback.className = 'copy-feedback';
+
+        setTimeout(() => {
+            copyLinkBtn.classList.remove('copied');
+            copyLinkBtn.innerHTML = ` + "`" + `
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+                    <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+                </svg>
+                Copy Link
+            ` + "`" + `;
+            copyFeedback.textContent = '';
+        }, 2000);
+    } catch (err) {
+        // Fallback - show the URL
+        copyFeedback.innerHTML = '<a href="' + shareURL + '" target="_blank" style="word-break:break-all;">Open link</a>';
+        copyFeedback.className = 'copy-feedback';
+    }
+});
 </script>
 </body>
 </html>`)
@@ -338,7 +471,9 @@ func handleConvert(w http.ResponseWriter, r *http.Request) {
 
 	// Build render options
 	opts := dot.RenderOptions{
-		Title: r.URL.Query().Get("title"),
+		Title:    r.URL.Query().Get("title"),
+		GraphDOT: graphDOT,
+		PathDOT:  pathDOT,
 	}
 
 	if pathDOT != "" {
@@ -421,7 +556,8 @@ func runCLI() {
 		output, err = dot.ToJSON(graph)
 	} else {
 		opts := dot.RenderOptions{
-			Title: *title,
+			Title:    *title,
+			GraphDOT: string(input),
 		}
 		output, err = dot.ToHTML(graph, opts)
 	}
