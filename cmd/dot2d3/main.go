@@ -471,9 +471,7 @@ func handleConvert(w http.ResponseWriter, r *http.Request) {
 
 	// Build render options
 	opts := dot.RenderOptions{
-		Title:    r.URL.Query().Get("title"),
-		GraphDOT: graphDOT,
-		PathDOT:  pathDOT,
+		Title: r.URL.Query().Get("title"),
 	}
 
 	if pathDOT != "" {
@@ -556,8 +554,7 @@ func runCLI() {
 		output, err = dot.ToJSON(graph)
 	} else {
 		opts := dot.RenderOptions{
-			Title:    *title,
-			GraphDOT: string(input),
+			Title: *title,
 		}
 		output, err = dot.ToHTML(graph, opts)
 	}

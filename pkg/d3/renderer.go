@@ -2,7 +2,6 @@ package d3
 
 import (
 	"bytes"
-	"encoding/base64"
 	"encoding/json"
 	"html/template"
 
@@ -487,12 +486,10 @@ func collectPathEndpoints(ep ast.EdgeEndpoint) []string {
 
 // RenderOptions configures HTML rendering.
 type RenderOptions struct {
-	Title    string
-	Width    int
-	Height   int
-	PathAST  *ast.Graph // Optional path graph to highlight
-	GraphDOT string     // Original graph DOT source (for shareable links)
-	PathDOT  string     // Original path DOT source (for shareable links)
+	Title   string
+	Width   int
+	Height  int
+	PathAST *ast.Graph // Optional path graph to highlight
 }
 
 // RenderHTML generates a self-contained HTML file with the D3 visualization.
@@ -523,26 +520,12 @@ func RenderHTMLWithValidation(g *Graph, opts RenderOptions) ([]byte, *PathValida
 		return nil, nil, err
 	}
 
-	// Encode DOT sources as base64 to avoid escaping issues in the template
-	graphDOTb64 := ""
-	if opts.GraphDOT != "" {
-		graphDOTb64 = base64.StdEncoding.EncodeToString([]byte(opts.GraphDOT))
-	}
-	pathDOTb64 := ""
-	if opts.PathDOT != "" {
-		pathDOTb64 = base64.StdEncoding.EncodeToString([]byte(opts.PathDOT))
-	}
-
 	data := struct {
-		Title       string
-		GraphJSON   template.JS
-		GraphDOTb64 string
-		PathDOTb64  string
+		Title     string
+		GraphJSON template.JS
 	}{
-		Title:       opts.Title,
-		GraphJSON:   template.JS(graphJSON),
-		GraphDOTb64: graphDOTb64,
-		PathDOTb64:  pathDOTb64,
+		Title:     opts.Title,
+		GraphJSON: template.JS(graphJSON),
 	}
 
 	tmpl, err := template.New("graph").Parse(htmlTemplate)
@@ -572,7 +555,7 @@ const htmlTemplate = `<!DOCTYPE html>
             overflow: hidden;
             background: #f5f5f5;
         }
-        svg {
+        #graph {
             width: 100vw;
             height: 100vh;
             background: white;
@@ -774,65 +757,6 @@ const htmlTemplate = `<!DOCTYPE html>
             margin-top: 12px;
             line-height: 1.4;
         }
-        .share-section {
-            margin-top: 16px;
-            padding-top: 16px;
-            border-top: 1px solid #eee;
-        }
-        .share-btn {
-            width: 100%;
-            padding: 8px 12px;
-            font-size: 13px;
-            background: #5cb85c;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            color: white;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 6px;
-        }
-        .share-btn:hover { background: #4cae4c; }
-        .share-btn:disabled {
-            background: #ccc;
-            cursor: not-allowed;
-        }
-        .share-btn.copied {
-            background: #337ab7;
-        }
-        .edit-btn {
-            width: 100%;
-            padding: 8px 12px;
-            font-size: 13px;
-            background: #f0f0f0;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            cursor: pointer;
-            color: #666;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 6px;
-            margin-top: 8px;
-            text-decoration: none;
-        }
-        .edit-btn:hover {
-            background: #e8e8e8;
-            color: #333;
-        }
-        .share-feedback {
-            font-size: 11px;
-            color: #666;
-            margin-top: 6px;
-            text-align: center;
-        }
-        .share-feedback.error {
-            color: #c9302c;
-        }
-        .share-feedback.success {
-            color: #3c763d;
-        }
     </style>
 </head>
 <body>
@@ -854,45 +778,12 @@ const htmlTemplate = `<!DOCTYPE html>
             Select a node and adjust the degree slider to filter the view to nodes within N connections.
             Set to "All" to show the complete graph.
         </div>
-        <div class="share-section">
-            <button class="share-btn" id="copy-link-btn">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
-                    <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
-                </svg>
-                Copy Link
-            </button>
-            <a class="edit-btn" id="edit-btn" href="#">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
-                    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
-                </svg>
-                Edit Graph
-            </a>
-            <div class="share-feedback" id="share-feedback"></div>
-        </div>
     </div>
     <div class="tooltip" id="tooltip"></div>
     <svg id="graph"></svg>
 
     <script>
     const graphData = {{.GraphJSON}};
-
-    // Original DOT sources for shareable links (base64 encoded to avoid escaping issues)
-    const graphDOTb64 = "{{.GraphDOTb64}}";
-    const pathDOTb64 = "{{.PathDOTb64}}";
-
-    // Decode the DOT sources
-    function decodeB64(s) {
-        if (!s) return "";
-        try {
-            return decodeURIComponent(escape(atob(s)));
-        } catch (e) {
-            return "";
-        }
-    }
-    const graphDOT = decodeB64(graphDOTb64);
-    const pathDOT = decodeB64(pathDOTb64);
 
     const width = window.innerWidth;
     const height = window.innerHeight;
@@ -1357,80 +1248,6 @@ const htmlTemplate = `<!DOCTYPE html>
             zoom.transform,
             d3.zoomIdentity.translate(0, 0).scale(1)
         );
-    });
-
-    // Share link functionality
-    const copyLinkBtn = document.getElementById("copy-link-btn");
-    const editBtn = document.getElementById("edit-btn");
-    const shareFeedback = document.getElementById("share-feedback");
-
-    function generateShareableURL() {
-        // Use base64 encoding for the graph and path DOT
-        const params = new URLSearchParams();
-
-        if (graphDOT) {
-            // Use URL-safe base64 encoding
-            const graphB64 = btoa(unescape(encodeURIComponent(graphDOT)))
-                .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-            params.set('g', graphB64);
-        }
-
-        if (pathDOT) {
-            const pathB64 = btoa(unescape(encodeURIComponent(pathDOT)))
-                .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-            params.set('p', pathB64);
-        }
-
-        // Build the URL - use current origin or a base URL
-        const baseURL = window.location.origin + '/';
-        return baseURL + '?' + params.toString();
-    }
-
-    // Set the edit button href (same as share link - both go to editor)
-    if (graphDOT) {
-        editBtn.href = generateShareableURL();
-    } else {
-        editBtn.style.display = 'none';
-    }
-
-    copyLinkBtn.addEventListener("click", async function() {
-        if (!graphDOT) {
-            shareFeedback.textContent = "No graph data to share";
-            shareFeedback.className = "share-feedback error";
-            return;
-        }
-
-        const shareURL = generateShareableURL();
-
-        try {
-            await navigator.clipboard.writeText(shareURL);
-            copyLinkBtn.classList.add("copied");
-            copyLinkBtn.innerHTML = ` + "`" + `
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <polyline points="20 6 9 17 4 12"></polyline>
-                </svg>
-                Copied!
-            ` + "`" + `;
-            shareFeedback.textContent = "Link copied to clipboard";
-            shareFeedback.className = "share-feedback success";
-
-            // Reset button after 2 seconds
-            setTimeout(() => {
-                copyLinkBtn.classList.remove("copied");
-                copyLinkBtn.innerHTML = ` + "`" + `
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
-                        <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
-                    </svg>
-                    Copy Link
-                ` + "`" + `;
-                shareFeedback.textContent = "";
-            }, 2000);
-        } catch (err) {
-            // Fallback for older browsers - show the URL
-            shareFeedback.innerHTML = ` + "`" + `<a href="${shareURL}" target="_blank" style="word-break:break-all;font-size:10px;">Open link</a>` + "`" + `;
-            shareFeedback.className = "share-feedback";
-        }
     });
     </script>
 </body>
