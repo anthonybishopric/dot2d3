@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/anthonybishopric/gographviz/pkg/ast"
-	"github.com/anthonybishopric/gographviz/pkg/lexer"
-	"github.com/anthonybishopric/gographviz/pkg/parser"
+	"github.com/anthonybishopric/dot2d3/pkg/ast"
+	"github.com/anthonybishopric/dot2d3/pkg/lexer"
+	"github.com/anthonybishopric/dot2d3/pkg/parser"
 )
 
 func parse(t *testing.T, input string) *ast.Graph {

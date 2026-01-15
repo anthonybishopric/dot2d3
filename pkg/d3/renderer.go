@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"html/template"
 
-	"github.com/anthonybishopric/gographviz/pkg/ast"
+	"github.com/anthonybishopric/dot2d3/pkg/ast"
 )
 
 // Converter converts an AST graph to a D3 graph structure.
@@ -347,15 +347,161 @@ func (c *Converter) linkExists(source, target string) bool {
 	return false
 }
 
+// ApplyPathHighlighting validates and applies path highlighting to a graph.
+// The pathGraph contains edges that should be highlighted in the main graph.
+// Returns a validation result indicating success or the first failing edge.
+func ApplyPathHighlighting(g *Graph, pathGraph *ast.Graph) *PathValidationResult {
+	// Build lookup maps for quick access
+	nodeMap := make(map[string]*Node)
+	for i := range g.Nodes {
+		nodeMap[g.Nodes[i].ID] = &g.Nodes[i]
+	}
+
+	// Helper to find a link by source and target
+	findLink := func(source, target string) *Link {
+		for i := range g.Links {
+			if g.Links[i].Source == source && g.Links[i].Target == target {
+				return &g.Links[i]
+			}
+			// For undirected graphs, also check reverse
+			if !g.Directed && g.Links[i].Source == target && g.Links[i].Target == source {
+				return &g.Links[i]
+			}
+		}
+		return nil
+	}
+
+	// Extract edges from path graph and validate each one
+	for _, stmt := range pathGraph.Statements {
+		edgeStmt, ok := stmt.(*ast.EdgeStmt)
+		if !ok {
+			continue // Skip non-edge statements in path
+		}
+
+		// Process edge chain
+		leftNodes := collectPathEndpoints(edgeStmt.Left)
+		for _, right := range edgeStmt.Rights {
+			rightNodes := collectPathEndpoints(right.Endpoint)
+
+			// Check all combinations
+			for _, leftID := range leftNodes {
+				for _, rightID := range rightNodes {
+					// Check if both nodes exist
+					leftNode, leftExists := nodeMap[leftID]
+					rightNode, rightExists := nodeMap[rightID]
+
+					if !leftExists && !rightExists {
+						// Neither node exists
+						return &PathValidationResult{
+							Valid: false,
+							Error: "edge '" + leftID + " -> " + rightID + "' references unknown node '" + leftID + "'",
+							InvalidEdge: &InvalidEdge{
+								Source:      leftID,
+								Target:      rightID,
+								InvalidNode: leftID,
+							},
+						}
+					}
+
+					if !leftExists {
+						// Left node doesn't exist, mark right as error point
+						rightNode.PathInvalid = true
+						return &PathValidationResult{
+							Valid: false,
+							Error: "edge '" + leftID + " -> " + rightID + "' references unknown node '" + leftID + "'",
+							InvalidEdge: &InvalidEdge{
+								Source:      leftID,
+								Target:      rightID,
+								InvalidNode: leftID,
+							},
+							LastValidNode: rightID,
+						}
+					}
+
+					if !rightExists {
+						// Right node doesn't exist, mark left as error point
+						leftNode.PathInvalid = true
+						return &PathValidationResult{
+							Valid: false,
+							Error: "edge '" + leftID + " -> " + rightID + "' references unknown node '" + rightID + "'",
+							InvalidEdge: &InvalidEdge{
+								Source:      leftID,
+								Target:      rightID,
+								InvalidNode: rightID,
+							},
+							LastValidNode: leftID,
+						}
+					}
+
+					// Both nodes exist, mark them as on path
+					leftNode.OnPath = true
+					rightNode.OnPath = true
+
+					// Find and mark the link
+					link := findLink(leftID, rightID)
+					if link != nil {
+						link.OnPath = true
+					}
+					// Note: We don't error if the edge doesn't exist in the graph,
+					// we just don't highlight it. The nodes are still valid.
+				}
+			}
+
+			// Move to next edge in chain
+			leftNodes = rightNodes
+		}
+	}
+
+	return &PathValidationResult{Valid: true}
+}
+
+// collectPathEndpoints extracts node IDs from an edge endpoint for path validation.
+func collectPathEndpoints(ep ast.EdgeEndpoint) []string {
+	var ids []string
+
+	switch e := ep.(type) {
+	case *ast.NodeID:
+		ids = append(ids, e.ID.Name)
+	case *ast.NodeGroup:
+		for _, n := range e.Nodes {
+			ids = append(ids, n.ID.Name)
+		}
+	case *ast.Subgraph:
+		// Recursively collect from subgraph statements
+		for _, stmt := range e.Statements {
+			if nodeStmt, ok := stmt.(*ast.NodeStmt); ok {
+				ids = append(ids, nodeStmt.NodeID.ID.Name)
+			}
+			if edgeStmt, ok := stmt.(*ast.EdgeStmt); ok {
+				ids = append(ids, collectPathEndpoints(edgeStmt.Left)...)
+				for _, r := range edgeStmt.Rights {
+					ids = append(ids, collectPathEndpoints(r.Endpoint)...)
+				}
+			}
+		}
+	}
+
+	return ids
+}
+
 // RenderOptions configures HTML rendering.
 type RenderOptions struct {
-	Title  string
-	Width  int
-	Height int
+	Title   string
+	Width   int
+	Height  int
+	PathAST *ast.Graph // Optional path graph to highlight
 }
 
 // RenderHTML generates a self-contained HTML file with the D3 visualization.
+// If opts.PathAST is set, path highlighting will be applied.
 func RenderHTML(g *Graph, opts RenderOptions) ([]byte, error) {
+	html, _, err := RenderHTMLWithValidation(g, opts)
+	return html, err
+}
+
+// RenderHTMLWithValidation generates HTML and returns path validation result.
+// If path validation fails, HTML is still generated with the error node highlighted red.
+func RenderHTMLWithValidation(g *Graph, opts RenderOptions) ([]byte, *PathValidationResult, error) {
 	if opts.Title == "" {
 		opts.Title = "Graph Visualization"
 		if g.GraphID != "" {
@@ -363,9 +509,15 @@ func RenderHTML(g *Graph, opts RenderOptions) ([]byte, error) {
 		}
 	}
 
+	// Apply path highlighting if provided
+	var pathResult *PathValidationResult
+	if opts.PathAST != nil {
+		pathResult = ApplyPathHighlighting(g, opts.PathAST)
+	}
+
 	graphJSON, err := json.Marshal(g)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	data := struct {
@@ -378,15 +530,15 @@ func RenderHTML(g *Graph, opts RenderOptions) ([]byte, error) {
 
 	tmpl, err := template.New("graph").Parse(htmlTemplate)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, data); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	return buf.Bytes(), nil
+	return buf.Bytes(), pathResult, nil
 }
 
 const htmlTemplate = `<!DOCTYPE html>
@@ -453,6 +605,44 @@ const htmlTemplate = `<!DOCTYPE html>
         .link-label.highlighted {
             fill: #ff6b00;
             font-weight: 600;
+        }
+        /* Dimmed elements - use color overrides instead of opacity for performance */
+        .node.dimmed ellipse,
+        .node.dimmed rect,
+        .node.dimmed polygon {
+            fill: #e0e0e0 !important;
+            stroke: #ccc !important;
+        }
+        .node.dimmed text {
+            fill: #bbb !important;
+        }
+        .link.dimmed {
+            stroke: #eee !important;
+        }
+        .link-label.dimmed {
+            fill: #ccc !important;
+        }
+        /* Path highlighting - orange for valid path */
+        .node.on-path ellipse,
+        .node.on-path rect,
+        .node.on-path polygon {
+            stroke: #ff6b00;
+            stroke-width: 4;
+        }
+        .link.on-path {
+            stroke: #ff6b00 !important;
+            stroke-opacity: 1;
+            stroke-width: 4;
+        }
+        .link.directed.on-path {
+            marker-end: url(#arrowhead-path);
+        }
+        /* Path invalid node - red highlight */
+        .node.path-invalid ellipse,
+        .node.path-invalid rect,
+        .node.path-invalid polygon {
+            stroke: #f44336;
+            stroke-width: 5;
         }
         .tooltip {
             position: absolute;
@@ -737,7 +927,7 @@ const htmlTemplate = `<!DOCTYPE html>
             .attr("d", "M0,-5L10,0L0,5")
             .attr("fill", "#999");
 
-        // Highlighted arrowhead
+        // Highlighted arrowhead (orange)
         defs.append("marker")
             .attr("id", "arrowhead-highlighted")
             .attr("viewBox", "0 -5 10 10")
@@ -745,6 +935,19 @@ const htmlTemplate = `<!DOCTYPE html>
             .attr("refY", 0)
             .attr("markerWidth", 6)
             .attr("markerHeight", 6)
+            .attr("orient", "auto")
+            .append("path")
+            .attr("d", "M0,-5L10,0L0,5")
+            .attr("fill", "#ff6b00");
+
+        // Path arrowhead (orange)
+        defs.append("marker")
+            .attr("id", "arrowhead-path")
+            .attr("viewBox", "0 -5 10 10")
+            .attr("refX", 25)
+            .attr("refY", 0)
+            .attr("markerWidth", 8)
+            .attr("markerHeight", 8)
             .attr("orient", "auto")
             .append("path")
             .attr("d", "M0,-5L10,0L0,5")
@@ -760,6 +963,9 @@ const htmlTemplate = `<!DOCTYPE html>
         .force("center", d3.forceCenter(width / 2, height / 2))
         .force("collision", d3.forceCollide().radius(40));
 
+    // Check if path highlighting is active
+    const hasPath = graphData.nodes.some(n => n.onPath) || graphData.links.some(l => l.onPath);
+
     // Draw links
     const link = g.append("g")
         .attr("class", "links")
@@ -767,6 +973,8 @@ const htmlTemplate = `<!DOCTYPE html>
         .data(graphData.links)
         .join("line")
         .attr("class", d => graphData.directed ? "link directed" : "link")
+        .classed("on-path", d => d.onPath)
+        .classed("dimmed", d => hasPath && !d.onPath)
         .attr("stroke", d => d.color || "#999")
         .attr("stroke-width", 2)
         .attr("stroke-dasharray", d => d.style === "dashed" ? "5,5" : null);
@@ -814,6 +1022,7 @@ const htmlTemplate = `<!DOCTYPE html>
         .data(graphData.links.filter(d => d.label))
         .join("text")
         .attr("class", "link-label")
+        .classed("dimmed", d => hasPath && !d.onPath)
         .text(d => d.label)
         .on("click", function(event, d) {
             event.stopPropagation();
@@ -845,6 +1054,9 @@ const htmlTemplate = `<!DOCTYPE html>
         .data(graphData.nodes)
         .join("g")
         .attr("class", "node")
+        .classed("on-path", d => d.onPath)
+        .classed("path-invalid", d => d.pathInvalid)
+        .classed("dimmed", d => hasPath && !d.onPath && !d.pathInvalid)
         .call(drag(simulation));
 
     // Color scale for nodes without explicit colors

@@ -2,14 +2,16 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
+	"strings"
 
-	"github.com/anthonybishopric/gographviz/pkg/dot"
+	"github.com/anthonybishopric/dot2d3/pkg/dot"
 )
 
 var (
@@ -109,8 +111,9 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
         height: calc(100vh - 40px);
     }
     .left-panel {
-        width: 400px;
+        width: 450px;
         flex-shrink: 0;
+        overflow-y: auto;
     }
     .right-panel {
         flex: 1;
@@ -118,6 +121,14 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
         flex-direction: column;
     }
     h1 { margin-top: 0; }
+    label {
+        display: block;
+        margin-top: 12px;
+        margin-bottom: 4px;
+        font-weight: 500;
+        font-size: 14px;
+    }
+    label:first-of-type { margin-top: 0; }
     textarea {
         width: 100%;
         box-sizing: border-box;
@@ -128,7 +139,7 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
         border-radius: 4px;
     }
     button {
-        margin-top: 10px;
+        margin-top: 12px;
         padding: 10px 20px;
         font-size: 14px;
         background: #4a90d9;
@@ -165,6 +176,20 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
         color: #999;
         font-size: 18px;
     }
+    .error-display {
+        padding: 20px;
+        background: #fff3f3;
+        border: 1px solid #f44336;
+        border-radius: 4px;
+        color: #c62828;
+        font-family: monospace;
+        font-size: 14px;
+    }
+    .hint {
+        font-size: 12px;
+        color: #888;
+        margin-top: 4px;
+    }
 </style>
 </head>
 <body>
@@ -173,25 +198,32 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
         <h1>dot2d3</h1>
         <p>Convert Graphviz DOT to interactive D3.js visualizations.</p>
         <form>
-            <textarea name="dot" rows="15" placeholder="digraph G {
-    A -> B -> C
-    B -> D [color=red]
+            <label for="graph">Graph (DOT format)</label>
+            <textarea name="graph" id="graph" rows="12" placeholder="digraph G {
+    A -> B -> C -> D
+    B -> E [color=red]
 }"></textarea>
+            <label for="path">Path to Highlight (optional)</label>
+            <textarea name="path" id="path" rows="4" placeholder="digraph { A -> B -> C }"></textarea>
+            <div class="hint">Path edges highlighted in orange. Rest of graph is dimmed. Invalid nodes show in red.</div>
             <button type="submit">Convert</button>
         </form>
         <details>
             <summary>API Usage</summary>
             <pre>
 POST /convert
-  Body: DOT file content
+  JSON body: {"graph": "...", "path": "..."}
   Query params:
     format=json  - Return JSON instead of HTML
     title=...    - Set the page title
 
 Examples:
+  curl -X POST -H "Content-Type: application/json" \
+    -d '{"graph":"digraph{A->B->C}","path":"digraph{A->B}"}' \
+    localhost:8080/convert
+
+  # Plain text (backward compatible, no path):
   curl -X POST -d 'digraph { A -> B }' localhost:8080/convert
-  curl -X POST -d @graph.dot localhost:8080/convert?title=MyGraph
-  curl -X POST -d 'digraph { A -> B }' localhost:8080/convert?format=json
             </pre>
         </details>
     </div>
@@ -204,16 +236,41 @@ Examples:
 <script>
 document.querySelector('form').addEventListener('submit', function(e) {
     e.preventDefault();
-    const dot = document.querySelector('textarea[name="dot"]').value;
+    const graphDOT = document.querySelector('textarea[name="graph"]').value;
+    const pathDOT = document.querySelector('textarea[name="path"]').value;
+
+    const body = JSON.stringify({
+        graph: graphDOT,
+        path: pathDOT || undefined
+    });
+
     fetch('/convert', {
         method: 'POST',
-        body: dot,
-        headers: {'Content-Type': 'text/plain'}
+        body: body,
+        headers: {'Content-Type': 'application/json'}
     })
-    .then(r => r.text())
-    .then(html => {
+    .then(r => {
+        if (r.headers.get('Content-Type')?.includes('application/json')) {
+            return r.json().then(data => ({ isError: true, data }));
+        }
+        return r.text().then(html => ({ isError: false, html }));
+    })
+    .then(result => {
         const iframe = document.getElementById('preview');
-        iframe.srcdoc = html;
+        if (result.isError) {
+            const err = result.data;
+            iframe.srcdoc = '<div style="padding:20px;font-family:sans-serif;">' +
+                '<h2 style="color:#c62828;margin-top:0;">Path Validation Error</h2>' +
+                '<p><strong>Error:</strong> ' + err.error + '</p>' +
+                (err.lastValidNode ? '<p><strong>Last valid node:</strong> ' + err.lastValidNode + '</p>' : '') +
+                '</div>';
+        } else {
+            iframe.srcdoc = result.html;
+        }
+    })
+    .catch(err => {
+        const iframe = document.getElementById('preview');
+        iframe.srcdoc = '<div style="padding:20px;color:#c62828;">' + err.message + '</div>';
     });
 });
 </script>
@@ -221,8 +278,21 @@ document.querySelector('form').addEventListener('submit', function(e) {
 </html>`)
 }
 
+// ConvertRequest is the JSON request body for /convert endpoint.
+type ConvertRequest struct {
+	Graph string `json:"graph"`
+	Path  string `json:"path,omitempty"`
+}
+
+// ConvertError is the JSON error response for path validation failures.
+type ConvertError struct {
+	Error         string                    `json:"error"`
+	InvalidEdge   *dot.PathValidationResult `json:"invalidEdge,omitempty"`
+	LastValidNode string                    `json:"lastValidNode,omitempty"`
+}
+
 func handleConvert(w http.ResponseWriter, r *http.Request) {
-	// Read DOT content from request body
+	// Read request body
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "Failed to read request body: "+err.Error(), http.StatusBadRequest)
@@ -235,38 +305,86 @@ func handleConvert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse DOT
-	graph, err := dot.Parse("request", body)
-	if err != nil {
-		http.Error(w, "Failed to parse DOT: "+err.Error(), http.StatusBadRequest)
+	// Determine if body is JSON or plain text DOT
+	var graphDOT, pathDOT string
+	contentType := r.Header.Get("Content-Type")
+	isJSON := strings.Contains(contentType, "application/json") ||
+		(len(body) > 0 && body[0] == '{')
+
+	if isJSON {
+		var req ConvertRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			http.Error(w, "Failed to parse JSON request: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		graphDOT = req.Graph
+		pathDOT = req.Path
+	} else {
+		// Plain text body is the graph DOT (backward compatible)
+		graphDOT = string(body)
+	}
+
+	if graphDOT == "" {
+		http.Error(w, "Graph DOT content is empty.", http.StatusBadRequest)
 		return
 	}
 
-	// Check query params
+	// Parse main graph DOT
+	graph, err := dot.Parse("request", []byte(graphDOT))
+	if err != nil {
+		http.Error(w, "Failed to parse graph DOT: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Build render options
+	opts := dot.RenderOptions{
+		Title: r.URL.Query().Get("title"),
+	}
+
+	if pathDOT != "" {
+		pathAST, err := dot.Parse("path", []byte(pathDOT))
+		if err != nil {
+			http.Error(w, "Failed to parse path DOT: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		opts.PathAST = pathAST
+	}
+
+	// Check query params for output format
 	format := r.URL.Query().Get("format")
-	pageTitle := r.URL.Query().Get("title")
 
 	// Generate output
 	var output []byte
-	var contentType string
+	var outputContentType string
 
 	if format == "json" {
 		output, err = dot.ToJSON(graph)
-		contentType = "application/json"
-	} else {
-		opts := dot.RenderOptions{
-			Title: pageTitle,
+		outputContentType = "application/json"
+		if err != nil {
+			http.Error(w, "Failed to generate JSON: "+err.Error(), http.StatusInternalServerError)
+			return
 		}
-		output, err = dot.ToHTML(graph, opts)
-		contentType = "text/html; charset=utf-8"
+	} else {
+		// Generate HTML with path validation
+		var pathResult *dot.PathValidationResult
+		output, pathResult, err = dot.ToHTMLWithValidation(graph, opts)
+		outputContentType = "text/html; charset=utf-8"
+
+		if err != nil {
+			http.Error(w, "Failed to generate HTML: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		// If path validation failed, return JSON error
+		if pathResult != nil && !pathResult.Valid {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(pathResult)
+			return
+		}
 	}
 
-	if err != nil {
-		http.Error(w, "Failed to generate output: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Type", outputContentType)
 	w.Write(output)
 }
 

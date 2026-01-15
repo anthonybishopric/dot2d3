@@ -20,13 +20,13 @@ A Go library and CLI tool that converts Graphviz DOT files into interactive D3.j
 ### Go Install
 
 ```bash
-go install github.com/anthonybishopric/gographviz/cmd/dot2d3@latest
+go install github.com/anthonybishopric/dot2d3/cmd/dot2d3@latest
 ```
 
 ### Build from Source
 
 ```bash
-git clone https://github.com/anthonybishopric/gographviz.git
+git clone https://github.com/anthonybishopric/dot2d3.git
 cd gographviz
 go build -o dot2d3 ./cmd/dot2d3
 ```
@@ -103,7 +103,7 @@ package main
 
 import (
     "fmt"
-    "github.com/anthonybishopric/gographviz/pkg/dot"
+    "github.com/anthonybishopric/dot2d3/pkg/dot"
 )
 
 func main() {

@@ -6,7 +6,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/anthonybishopric/gographviz/pkg/token"
+	"github.com/anthonybishopric/dot2d3/pkg/token"
 )
 
 // Lexer tokenizes DOT source code.

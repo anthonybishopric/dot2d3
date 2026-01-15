@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/anthonybishopric/gographviz/pkg/ast"
-	"github.com/anthonybishopric/gographviz/pkg/lexer"
-	"github.com/anthonybishopric/gographviz/pkg/token"
+	"github.com/anthonybishopric/dot2d3/pkg/ast"
+	"github.com/anthonybishopric/dot2d3/pkg/lexer"
+	"github.com/anthonybishopric/dot2d3/pkg/token"
 )
 
 // Parser parses DOT source code into an AST.

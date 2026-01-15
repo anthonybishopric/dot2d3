@@ -1,7 +1,7 @@
 // Package ast defines the abstract syntax tree for the DOT language.
 package ast
 
-import "github.com/anthonybishopric/gographviz/pkg/token"
+import "github.com/anthonybishopric/dot2d3/pkg/token"
 
 // Node is the interface implemented by all AST nodes.
 type Node interface {

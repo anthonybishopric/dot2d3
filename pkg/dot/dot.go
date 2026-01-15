@@ -5,10 +5,10 @@ package dot
 import (
 	"encoding/json"
 
-	"github.com/anthonybishopric/gographviz/pkg/ast"
-	"github.com/anthonybishopric/gographviz/pkg/d3"
-	"github.com/anthonybishopric/gographviz/pkg/lexer"
-	"github.com/anthonybishopric/gographviz/pkg/parser"
+	"github.com/anthonybishopric/dot2d3/pkg/ast"
+	"github.com/anthonybishopric/dot2d3/pkg/d3"
+	"github.com/anthonybishopric/dot2d3/pkg/lexer"
+	"github.com/anthonybishopric/dot2d3/pkg/parser"
 )
 
 // Parse parses DOT source code and returns the AST.
@@ -35,6 +35,9 @@ func ToJSON(graph *ast.Graph) ([]byte, error) {
 // RenderOptions configures HTML rendering.
 type RenderOptions = d3.RenderOptions
 
+// PathValidationResult is the result of validating a path against a graph.
+type PathValidationResult = d3.PathValidationResult
+
 // ToHTML generates a self-contained HTML file with D3 visualization.
 func ToHTML(graph *ast.Graph, opts RenderOptions) ([]byte, error) {
 	d3g, err := ToD3Graph(graph)
@@ -42,6 +45,16 @@ func ToHTML(graph *ast.Graph, opts RenderOptions) ([]byte, error) {
 		return nil, err
 	}
 	return d3.RenderHTML(d3g, opts)
+}
+
+// ToHTMLWithValidation generates HTML and returns path validation result.
+// If path validation fails, HTML is still generated with the error node highlighted red.
+func ToHTMLWithValidation(graph *ast.Graph, opts RenderOptions) ([]byte, *PathValidationResult, error) {
+	d3g, err := ToD3Graph(graph)
+	if err != nil {
+		return nil, nil, err
+	}
+	return d3.RenderHTMLWithValidation(d3g, opts)
 }
 
 // ParseAndRenderHTML is a convenience function that parses DOT and renders HTML.

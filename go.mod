@@ -1,3 +1,3 @@
-module github.com/anthonybishopric/gographviz
+module github.com/anthonybishopric/dot2d3
 
 go 1.24.4

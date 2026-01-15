@@ -3,7 +3,7 @@ package lexer
 import (
 	"testing"
 
-	"github.com/anthonybishopric/gographviz/pkg/token"
+	"github.com/anthonybishopric/dot2d3/pkg/token"
 )
 
 func TestLexer(t *testing.T) {
