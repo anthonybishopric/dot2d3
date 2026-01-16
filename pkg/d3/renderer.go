@@ -786,8 +786,8 @@ const htmlTemplate = `<!DOCTYPE html>
         <div class="control-group">
             <label>Degree of Separation</label>
             <div class="slider-container">
-                <input type="range" id="degree-slider" min="0" max="5" value="0" step="1">
-                <span class="slider-value" id="degree-value">All</span>
+                <input type="range" id="degree-slider" min="0" max="5" value="1" step="1">
+                <span class="slider-value" id="degree-value">1</span>
             </div>
         </div>
         <div class="control-group">
@@ -812,7 +812,7 @@ const htmlTemplate = `<!DOCTYPE html>
 
     // State for filtering
     let selectedNodeId = null;
-    let degreeFilter = 0; // 0 means "All" (no filter)
+    let degreeFilter = 1; // 0 means "All" (no filter), default to 1
     let positionsLocked = false; // When true, simulation is stopped but dragging still works
 
     // Build adjacency list for traversal (treat as undirected for reachability)
