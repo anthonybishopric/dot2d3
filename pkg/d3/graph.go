@@ -15,7 +15,8 @@ type Graph struct {
 type Node struct {
 	ID          string            `json:"id"`
 	Label       string            `json:"label,omitempty"`
-	Color       string            `json:"color,omitempty"`
+	Color       string            `json:"color,omitempty"`     // Border/stroke color
+	FillColor   string            `json:"fillColor,omitempty"` // Fill color
 	Shape       string            `json:"shape,omitempty"`
 	Style       string            `json:"style,omitempty"`
 	Group       string            `json:"group,omitempty"`

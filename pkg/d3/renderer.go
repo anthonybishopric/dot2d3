@@ -276,8 +276,12 @@ func (c *Converter) ensureNode(id string, subgraphID string) {
 			if node.Label == id { // Still has default label
 				c.applyNodeAttr(node, k, v)
 			}
-		case "color", "fillcolor":
+		case "color":
 			if node.Color == "" {
+				c.applyNodeAttr(node, k, v)
+			}
+		case "fillcolor":
+			if node.FillColor == "" {
 				c.applyNodeAttr(node, k, v)
 			}
 		case "shape":
@@ -304,8 +308,10 @@ func (c *Converter) applyNodeAttr(node *Node, key, value string) {
 	switch key {
 	case "label":
 		node.Label = value
-	case "color", "fillcolor":
-		node.Color = value
+	case "color":
+		node.Color = value // Border/stroke color
+	case "fillcolor":
+		node.FillColor = value // Fill color
 	case "shape":
 		node.Shape = value
 	case "style":
@@ -570,9 +576,9 @@ const htmlTemplate = `<!DOCTYPE html>
         }
         .node.filtered-out { opacity: 0.15; }
         .link {
-            stroke: #999;
             stroke-opacity: 0.6;
             fill: none;
+            cursor: pointer;
         }
         .link.directed { marker-end: url(#arrowhead); }
         .link.filtered-out { opacity: 0.08; }
@@ -606,21 +612,15 @@ const htmlTemplate = `<!DOCTYPE html>
             fill: #ff6b00;
             font-weight: 600;
         }
-        /* Dimmed elements - use color overrides instead of opacity for performance */
-        .node.dimmed ellipse,
-        .node.dimmed rect,
-        .node.dimmed polygon {
-            fill: #e0e0e0 !important;
-            stroke: #ccc !important;
-        }
-        .node.dimmed text {
-            fill: #bbb !important;
+        /* Dimmed elements - use opacity to preserve custom colors */
+        .node.dimmed {
+            opacity: 0.25;
         }
         .link.dimmed {
-            stroke: #eee !important;
+            opacity: 0.15;
         }
         .link-label.dimmed {
-            fill: #ccc !important;
+            opacity: 0.25;
         }
         /* Path highlighting - orange for valid path */
         .node.on-path ellipse,
@@ -1020,7 +1020,30 @@ const htmlTemplate = `<!DOCTYPE html>
         .classed("dimmed", d => hasPath && !d.onPath)
         .attr("stroke", d => d.color || "#999")
         .attr("stroke-width", 2)
-        .attr("stroke-dasharray", d => d.style === "dashed" ? "5,5" : null);
+        .attr("stroke-dasharray", d => d.style === "dashed" ? "5,5" : null)
+        .on("click", function(event, d) {
+            event.stopPropagation();
+            // Toggle highlight
+            if (highlightedEdgeIndex === d._index) {
+                highlightedEdgeIndex = null;
+            } else {
+                highlightedEdgeIndex = d._index;
+            }
+            updateEdgeHighlight();
+
+            // Emit custom event
+            const customEvent = new CustomEvent("edgeClick", {
+                detail: {
+                    source: typeof d.source === 'object' ? d.source.id : d.source,
+                    target: typeof d.target === 'object' ? d.target.id : d.target,
+                    label: d.label,
+                    color: d.color,
+                    highlighted: highlightedEdgeIndex === d._index
+                },
+                bubbles: true
+            });
+            document.dispatchEvent(customEvent);
+        });
 
     // Detect bidirectional edges and assign label offsets
     const edgePairs = new Map(); // key: "A|B" (sorted), value: array of link indices
@@ -1109,7 +1132,11 @@ const htmlTemplate = `<!DOCTYPE html>
     node.each(function(d) {
         const el = d3.select(this);
         const shape = (d.shape || "ellipse").toLowerCase();
-        const color = d.color || colorScale(d.group || d.id);
+        // fillColor takes precedence, then color, then auto-generated
+        const autoColor = colorScale(d.group || d.id);
+        const fillColor = d.fillColor || d.color || autoColor;
+        // stroke color: explicit color, or darker version of fill
+        const strokeColor = d.color || d3.color(fillColor).darker(0.5);
 
         if (shape === "box" || shape === "rect" || shape === "rectangle" || shape === "square") {
             el.append("rect")
@@ -1118,22 +1145,22 @@ const htmlTemplate = `<!DOCTYPE html>
                 .attr("x", -25)
                 .attr("y", -15)
                 .attr("rx", 4)
-                .attr("fill", color)
-                .attr("stroke", d3.color(color).darker(0.5))
+                .attr("fill", fillColor)
+                .attr("stroke", strokeColor)
                 .attr("stroke-width", 1.5);
         } else if (shape === "diamond") {
             el.append("polygon")
                 .attr("points", "0,-20 20,0 0,20 -20,0")
-                .attr("fill", color)
-                .attr("stroke", d3.color(color).darker(0.5))
+                .attr("fill", fillColor)
+                .attr("stroke", strokeColor)
                 .attr("stroke-width", 1.5);
         } else {
             // Default: ellipse/circle
             el.append("ellipse")
                 .attr("rx", 25)
                 .attr("ry", 18)
-                .attr("fill", color)
-                .attr("stroke", d3.color(color).darker(0.5))
+                .attr("fill", fillColor)
+                .attr("stroke", strokeColor)
                 .attr("stroke-width", 1.5);
         }
     });
@@ -1306,6 +1333,10 @@ const htmlTemplate = `<!DOCTYPE html>
 
     document.addEventListener("edgeLabelClick", function(e) {
         console.log("edgeLabelClick event:", e.detail);
+    });
+
+    document.addEventListener("edgeClick", function(e) {
+        console.log("edgeClick event:", e.detail);
     });
 
     document.addEventListener("filterChange", function(e) {
