@@ -243,10 +243,17 @@ func (c *Converter) processSubgraph(sg *ast.Subgraph) {
 			ID:    sgID,
 			Nodes: nodeIDs,
 		}
-		// Check for label in subgraph statements
+		// Check for label, color, and style in subgraph statements
 		for _, stmt := range sg.Statements {
-			if assign, ok := stmt.(*ast.AttrAssign); ok && assign.Key.Name == "label" {
-				sub.Label = assign.Value.Name
+			if assign, ok := stmt.(*ast.AttrAssign); ok {
+				switch assign.Key.Name {
+				case "label":
+					sub.Label = assign.Value.Name
+				case "color":
+					sub.Color = assign.Value.Name
+				case "style":
+					sub.Style = assign.Value.Name
+				}
 			}
 		}
 		c.subgraphs = append(c.subgraphs, sub)
@@ -773,6 +780,21 @@ const htmlTemplate = `<!DOCTYPE html>
             cursor: pointer;
             user-select: none;
         }
+        /* Cluster/Subgraph styling */
+        .cluster-hull {
+            fill-opacity: 0.15;
+            stroke-width: 2;
+            stroke-dasharray: 5,3;
+        }
+        .cluster-hull.filled {
+            fill-opacity: 0.25;
+        }
+        .cluster-label {
+            font-size: 14px;
+            font-weight: 600;
+            fill: #555;
+            pointer-events: none;
+        }
     </style>
 </head>
 <body>
@@ -1006,8 +1028,208 @@ const htmlTemplate = `<!DOCTYPE html>
         .force("center", d3.forceCenter(width / 2, height / 2))
         .force("collision", d3.forceCollide().radius(40));
 
+    // Clustering forces - attract nodes within same cluster, repel different clusters
+    const clusterAttractionStrength = 0.15;
+    const clusterRepulsionStrength = 0.8;
+    const clusterRepulsionDistance = 200; // Minimum distance between cluster centers
+
+    if (graphData.subgraphs && graphData.subgraphs.length > 0) {
+        // Build node lookup by id for quick access
+        const nodeById = new Map(graphData.nodes.map(n => [n.id, n]));
+
+        simulation.force("cluster", function(alpha) {
+            // First pass: calculate centroid for each subgraph
+            const centroids = [];
+            graphData.subgraphs.forEach((sg, i) => {
+                if (!sg.nodes || sg.nodes.length === 0) return;
+
+                let cx = 0, cy = 0, count = 0;
+                sg.nodes.forEach(nodeId => {
+                    const node = nodeById.get(nodeId);
+                    if (node && node.x !== undefined && node.y !== undefined) {
+                        cx += node.x;
+                        cy += node.y;
+                        count++;
+                    }
+                });
+
+                if (count > 0) {
+                    centroids.push({ sg, cx: cx / count, cy: cy / count, count, index: i });
+                }
+            });
+
+            // Second pass: apply attraction toward own centroid
+            centroids.forEach(({ sg, cx, cy }) => {
+                sg.nodes.forEach(nodeId => {
+                    const node = nodeById.get(nodeId);
+                    if (node && node.x !== undefined && node.y !== undefined) {
+                        node.vx += (cx - node.x) * alpha * clusterAttractionStrength;
+                        node.vy += (cy - node.y) * alpha * clusterAttractionStrength;
+                    }
+                });
+            });
+
+            // Third pass: apply repulsion between cluster centroids
+            for (let i = 0; i < centroids.length; i++) {
+                for (let j = i + 1; j < centroids.length; j++) {
+                    const c1 = centroids[i];
+                    const c2 = centroids[j];
+
+                    const dx = c2.cx - c1.cx;
+                    const dy = c2.cy - c1.cy;
+                    const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+
+                    // Apply repulsion if clusters are too close
+                    if (dist < clusterRepulsionDistance) {
+                        const force = (clusterRepulsionDistance - dist) / dist * alpha * clusterRepulsionStrength;
+                        const fx = dx * force;
+                        const fy = dy * force;
+
+                        // Apply repulsion force to all nodes in each cluster
+                        c1.sg.nodes.forEach(nodeId => {
+                            const node = nodeById.get(nodeId);
+                            if (node && node.x !== undefined) {
+                                node.vx -= fx / c1.count;
+                                node.vy -= fy / c1.count;
+                            }
+                        });
+                        c2.sg.nodes.forEach(nodeId => {
+                            const node = nodeById.get(nodeId);
+                            if (node && node.x !== undefined) {
+                                node.vx += fx / c2.count;
+                                node.vy += fy / c2.count;
+                            }
+                        });
+                    }
+                }
+            }
+        });
+    }
+
     // Check if path highlighting is active
     const hasPath = graphData.nodes.some(n => n.onPath) || graphData.links.some(l => l.onPath);
+
+    // Normalize color values - converts various formats to CSS-compatible colors
+    function normalizeColor(color) {
+        if (!color) return null;
+        // Convert 0xRRGGBB or 0xRGB format to #RRGGBB or #RGB
+        if (typeof color === 'string' && color.toLowerCase().startsWith('0x')) {
+            return '#' + color.slice(2);
+        }
+        // Add # prefix if it looks like a hex code without one (6 or 3 hex chars)
+        if (typeof color === 'string' && /^[0-9a-fA-F]{6}$/.test(color)) {
+            return '#' + color;
+        }
+        if (typeof color === 'string' && /^[0-9a-fA-F]{3}$/.test(color)) {
+            return '#' + color;
+        }
+        return color;
+    }
+
+    // Safe color darkening - returns fallback if color is invalid
+    function safeColorDarker(color, amount, fallback) {
+        const parsed = d3.color(color);
+        if (parsed) {
+            return parsed.darker(amount);
+        }
+        return fallback || color;
+    }
+
+    // Color scale for clusters without explicit colors
+    const clusterColorScale = d3.scaleOrdinal(d3.schemeSet2);
+
+    // Draw cluster hulls (convex hulls around subgraph nodes)
+    // Build node lookup for hull calculations
+    const nodeByIdForHull = new Map(graphData.nodes.map(n => [n.id, n]));
+
+    // Helper function to compute expanded convex hull with padding
+    function computeHullPath(nodeIds, padding = 30) {
+        const points = [];
+        nodeIds.forEach(id => {
+            const node = nodeByIdForHull.get(id);
+            if (node && node.x !== undefined && node.y !== undefined) {
+                // Add points around each node to create padding
+                const offsets = [
+                    [0, -padding], [padding, 0], [0, padding], [-padding, 0],
+                    [padding * 0.7, -padding * 0.7], [padding * 0.7, padding * 0.7],
+                    [-padding * 0.7, padding * 0.7], [-padding * 0.7, -padding * 0.7]
+                ];
+                offsets.forEach(([dx, dy]) => {
+                    points.push([node.x + dx, node.y + dy]);
+                });
+            }
+        });
+
+        if (points.length < 3) return null;
+
+        const hull = d3.polygonHull(points);
+        if (!hull) return null;
+
+        // Create smooth path using curve
+        return d3.line().curve(d3.curveCatmullRomClosed.alpha(0.5))(hull);
+    }
+
+    // Create hull group (drawn first so it's behind everything)
+    const hullGroup = g.append("g").attr("class", "cluster-hulls");
+    const labelGroup = g.append("g").attr("class", "cluster-labels");
+
+    // Create hull paths and labels for each subgraph
+    const clusterHulls = [];
+    const clusterLabels = [];
+    if (graphData.subgraphs && graphData.subgraphs.length > 0) {
+        graphData.subgraphs.forEach((sg, i) => {
+            if (!sg.nodes || sg.nodes.length === 0) return;
+
+            const hullColor = normalizeColor(sg.color) || clusterColorScale(sg.id || i);
+            const isFilled = sg.style === 'filled';
+
+            const hullPath = hullGroup.append("path")
+                .attr("class", "cluster-hull" + (isFilled ? " filled" : ""))
+                .attr("fill", hullColor)
+                .attr("stroke", hullColor)
+                .datum(sg);
+
+            clusterHulls.push({ sg, path: hullPath });
+
+            // Add label if present
+            if (sg.label) {
+                const label = labelGroup.append("text")
+                    .attr("class", "cluster-label")
+                    .text(sg.label)
+                    .style("fill", d3.color(hullColor).darker(1));
+
+                clusterLabels.push({ sg, label });
+            }
+        });
+    }
+
+    // Function to update hull paths
+    function updateHulls() {
+        clusterHulls.forEach(({ sg, path }) => {
+            const pathData = computeHullPath(sg.nodes);
+            if (pathData) {
+                path.attr("d", pathData);
+            }
+        });
+
+        // Update label positions (top of hull)
+        clusterLabels.forEach(({ sg, label }) => {
+            let minY = Infinity, sumX = 0, count = 0;
+            sg.nodes.forEach(id => {
+                const node = nodeByIdForHull.get(id);
+                if (node && node.x !== undefined && node.y !== undefined) {
+                    sumX += node.x;
+                    count++;
+                    if (node.y < minY) minY = node.y;
+                }
+            });
+            if (count > 0) {
+                label.attr("x", sumX / count)
+                     .attr("y", minY - 40)
+                     .attr("text-anchor", "middle");
+            }
+        });
+    }
 
     // Draw links
     const link = g.append("g")
@@ -1018,7 +1240,7 @@ const htmlTemplate = `<!DOCTYPE html>
         .attr("class", d => graphData.directed ? "link directed" : "link")
         .classed("on-path", d => d.onPath)
         .classed("dimmed", d => hasPath && !d.onPath)
-        .attr("stroke", d => d.color || "#999")
+        .attr("stroke", d => normalizeColor(d.color) || "#999")
         .attr("stroke-width", 2)
         .attr("stroke-dasharray", d => d.style === "dashed" ? "5,5" : null)
         .on("click", function(event, d) {
@@ -1134,9 +1356,9 @@ const htmlTemplate = `<!DOCTYPE html>
         const shape = (d.shape || "ellipse").toLowerCase();
         // fillColor takes precedence, then color, then auto-generated
         const autoColor = colorScale(d.group || d.id);
-        const fillColor = d.fillColor || d.color || autoColor;
+        const fillColor = normalizeColor(d.fillColor) || normalizeColor(d.color) || autoColor;
         // stroke color: explicit color, or darker version of fill
-        const strokeColor = d.color || d3.color(fillColor).darker(0.5);
+        const strokeColor = normalizeColor(d.color) || safeColorDarker(fillColor, 0.5, '#666');
 
         if (shape === "box" || shape === "rect" || shape === "rectangle" || shape === "square") {
             el.append("rect")
@@ -1275,6 +1497,8 @@ const htmlTemplate = `<!DOCTYPE html>
                     return ` + "`" + `translate(${midX + perpX * offset},${midY + perpY * offset})` + "`" + `;
                 });
                 node.attr("transform", d => ` + "`" + `translate(${d.x},${d.y})` + "`" + `);
+                // Update cluster hulls
+                updateHulls();
             }
         }
 
@@ -1295,6 +1519,9 @@ const htmlTemplate = `<!DOCTYPE html>
 
     // Update positions on tick
     simulation.on("tick", () => {
+        // Update cluster hulls first (so they're behind everything)
+        updateHulls();
+
         link
             .attr("x1", d => d.source.x)
             .attr("y1", d => d.source.y)

@@ -40,6 +40,8 @@ type Link struct {
 type Subgraph struct {
 	ID    string   `json:"id"`
 	Label string   `json:"label,omitempty"`
+	Color string   `json:"color,omitempty"`
+	Style string   `json:"style,omitempty"`
 	Nodes []string `json:"nodes"`
 }
 
