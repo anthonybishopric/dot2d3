@@ -260,6 +260,13 @@ func handleIndex(w http.ResponseWriter, r *http.Request) {
         font-size: 11px;
         color: #888;
         margin-bottom: 4px;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+    }
+    .link-sigil {
+        color: #5cb85c;
+        flex-shrink: 0;
     }
     .history-item-preview {
         font-size: 12px;
@@ -348,6 +355,7 @@ var LZString=function(){var r=String.fromCharCode,o="ABCDEFGHIJKLMNOPQRSTUVWXYZa
 // History management
 const HISTORY_KEY = 'dot2d3_history';
 let isRestoringFromHistory = false;
+let isFromSharedLink = false;
 let selectedHistoryId = null;
 
 function getHistory() {
@@ -362,13 +370,14 @@ function saveHistory(history) {
     localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
 }
 
-function addToHistory(graph, path) {
+function addToHistory(graph, path, fromLink) {
     const history = getHistory();
     const entry = {
         id: Date.now(),
         timestamp: new Date().toISOString(),
         graph: graph,
-        path: path || ''
+        path: path || '',
+        fromLink: fromLink || false
     };
     history.unshift(entry);
     saveHistory(history);
@@ -415,8 +424,9 @@ function renderHistory() {
     historyList.innerHTML = history.map(entry => {
         const timeStr = formatTimestamp(entry.timestamp);
         const preview = getGraphPreview(entry.graph);
+        const linkIcon = entry.fromLink ? '<svg class="link-sigil" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>' : '';
         return '<div class="history-item" data-id="' + entry.id + '">' +
-            '<div class="history-item-time">' + timeStr + '</div>' +
+            '<div class="history-item-time">' + linkIcon + timeStr + '</div>' +
             '<div class="history-item-preview">' + escapeHtml(preview) + '</div>' +
             '</div>';
     }).join('');
@@ -514,11 +524,12 @@ document.querySelector('form').addEventListener('submit', function(e) {
                 '</div>';
         } else {
             iframe.srcdoc = result.html;
-            // Save to history on successful conversion (but not when restoring)
+            // Save to history on successful conversion (but not when restoring from history)
             if (!isRestoringFromHistory) {
-                addToHistory(graphDOT, pathDOT);
+                addToHistory(graphDOT, pathDOT, isFromSharedLink);
             }
             isRestoringFromHistory = false;
+            isFromSharedLink = false;
         }
     })
     .catch(err => {
@@ -558,10 +569,12 @@ function decompress(str) {
     const graphParam = params.get('g');
     const pathParam = params.get('p');
 
+    let hasGraph = false;
     if (graphParam) {
         const graphDOT = decompress(graphParam);
         if (graphDOT) {
             document.querySelector('textarea[name="graph"]').value = graphDOT;
+            hasGraph = true;
         }
     }
     if (pathParam) {
@@ -569,6 +582,16 @@ function decompress(str) {
         if (pathDOT) {
             document.querySelector('textarea[name="path"]').value = pathDOT;
         }
+    }
+
+    // Auto-convert if graph parameter was provided in URL
+    if (hasGraph) {
+        // Mark as coming from a shared link so history shows the link icon
+        isFromSharedLink = true;
+        // Trigger conversion after a short delay to ensure DOM is ready
+        setTimeout(() => {
+            document.querySelector('form').dispatchEvent(new Event('submit'));
+        }, 100);
     }
 })();
 
