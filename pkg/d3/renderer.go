@@ -757,6 +757,22 @@ const htmlTemplate = `<!DOCTYPE html>
             margin-top: 12px;
             line-height: 1.4;
         }
+        .checkbox-control {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .checkbox-control input[type="checkbox"] {
+            width: 16px;
+            height: 16px;
+            cursor: pointer;
+        }
+        .checkbox-control span {
+            font-size: 13px;
+            color: #333;
+            cursor: pointer;
+            user-select: none;
+        }
     </style>
 </head>
 <body>
@@ -773,6 +789,12 @@ const htmlTemplate = `<!DOCTYPE html>
                 <input type="range" id="degree-slider" min="0" max="5" value="0" step="1">
                 <span class="slider-value" id="degree-value">All</span>
             </div>
+        </div>
+        <div class="control-group">
+            <label class="checkbox-control">
+                <input type="checkbox" id="lock-positions">
+                <span>Lock node positions</span>
+            </label>
         </div>
         <div class="help-text">
             Select a node and adjust the degree slider to filter the view to nodes within N connections.
@@ -791,6 +813,7 @@ const htmlTemplate = `<!DOCTYPE html>
     // State for filtering
     let selectedNodeId = null;
     let degreeFilter = 0; // 0 means "All" (no filter)
+    let positionsLocked = false; // When true, simulation is stopped but dragging still works
 
     // Build adjacency list for traversal (treat as undirected for reachability)
     const adjacency = new Map();
@@ -894,6 +917,26 @@ const htmlTemplate = `<!DOCTYPE html>
     document.getElementById("clear-selection").addEventListener("click", function() {
         selectedNodeId = null;
         updateFilter();
+    });
+
+    // Lock positions checkbox
+    document.getElementById("lock-positions").addEventListener("change", function() {
+        positionsLocked = this.checked;
+        if (positionsLocked) {
+            // Stop the simulation and fix all nodes at current positions
+            simulation.stop();
+            graphData.nodes.forEach(n => {
+                n.fx = n.x;
+                n.fy = n.y;
+            });
+        } else {
+            // Unfix all nodes and restart simulation
+            graphData.nodes.forEach(n => {
+                n.fx = null;
+                n.fy = null;
+            });
+            simulation.alpha(0.3).restart();
+        }
     });
 
     const svg = d3.select("#graph")
@@ -1173,7 +1216,9 @@ const htmlTemplate = `<!DOCTYPE html>
     // Drag behavior
     function drag(simulation) {
         function dragstarted(event) {
-            if (!event.active) simulation.alphaTarget(0.3).restart();
+            if (!positionsLocked) {
+                if (!event.active) simulation.alphaTarget(0.3).restart();
+            }
             event.subject.fx = event.subject.x;
             event.subject.fy = event.subject.y;
         }
@@ -1181,12 +1226,38 @@ const htmlTemplate = `<!DOCTYPE html>
         function dragged(event) {
             event.subject.fx = event.x;
             event.subject.fy = event.y;
+            // When locked, manually update the visual position since simulation isn't running
+            if (positionsLocked) {
+                event.subject.x = event.x;
+                event.subject.y = event.y;
+                // Update link and node positions immediately
+                link
+                    .attr("x1", d => d.source.x)
+                    .attr("y1", d => d.source.y)
+                    .attr("x2", d => d.target.x)
+                    .attr("y2", d => d.target.y);
+                linkLabel.attr("transform", d => {
+                    const midX = (d.source.x + d.target.x) / 2;
+                    const midY = (d.source.y + d.target.y) / 2;
+                    const dx = d.target.x - d.source.x;
+                    const dy = d.target.y - d.source.y;
+                    const len = Math.sqrt(dx * dx + dy * dy) || 1;
+                    const perpX = -dy / len;
+                    const perpY = dx / len;
+                    const offset = d._labelOffset || 0;
+                    return ` + "`" + `translate(${midX + perpX * offset},${midY + perpY * offset})` + "`" + `;
+                });
+                node.attr("transform", d => ` + "`" + `translate(${d.x},${d.y})` + "`" + `);
+            }
         }
 
         function dragended(event) {
-            if (!event.active) simulation.alphaTarget(0);
-            event.subject.fx = null;
-            event.subject.fy = null;
+            if (!positionsLocked) {
+                if (!event.active) simulation.alphaTarget(0);
+                event.subject.fx = null;
+                event.subject.fy = null;
+            }
+            // When locked, keep the node fixed at its new position
         }
 
         return d3.drag()
