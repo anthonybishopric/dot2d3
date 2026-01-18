@@ -659,6 +659,13 @@ const htmlTemplate = `<!DOCTYPE html>
         .curved-edge.directed {
             marker-end: url(#arrowhead-curved);
         }
+        .curved-edge.on-path {
+            stroke: #ff6b00 !important;
+            stroke-width: 4;
+        }
+        .curved-edge.on-path.directed {
+            marker-end: url(#arrowhead-path);
+        }
         /* Multi-edge label container */
         .multi-edge-labels {
             pointer-events: all;
@@ -1750,10 +1757,10 @@ const htmlTemplate = `<!DOCTYPE html>
             if (d.isBidirectional) cls += " bidirectional";
             return cls;
         })
-        .classed("on-path", d => d.links.some(l => l.onPath))
+        // Don't highlight unified line when edges are on path - we'll show curved edges instead
         .classed("dimmed", d => hasPath && !d.links.some(l => l.onPath))
-        .attr("stroke", d => d.links.some(l => l.onPath) ? "#ff6b00" : "#999")
-        .attr("stroke-width", d => d.links.some(l => l.onPath) ? 4 : 2);
+        .attr("stroke", "#999")
+        .attr("stroke-width", 2);
 
     // Draw curved paths for each edge in multi-edge groups (initially hidden)
     const curvedEdges = [];
@@ -1784,8 +1791,12 @@ const htmlTemplate = `<!DOCTYPE html>
             const path = curvedEdgeGroup.append("path")
                 .datum(link)
                 .attr("class", "curved-edge")
-                .attr("stroke", normalizeColor(link.color) || "#ff6b00")
-                .attr("stroke-width", 3);
+                // Show curved edge if on path
+                .classed("visible", link.onPath)
+                .classed("directed", link.onPath && graphData.directed)
+                .classed("on-path", link.onPath)
+                .attr("stroke", link.onPath ? "#ff6b00" : (normalizeColor(link.color) || "#ff6b00"))
+                .attr("stroke-width", link.onPath ? 4 : 3);
 
             curvedEdges.push({
                 link,
@@ -1885,10 +1896,13 @@ const htmlTemplate = `<!DOCTYPE html>
         });
 
         // Show/hide curved edges (and their arrowheads)
+        // Visible if: selected OR on path
         curvedEdges.forEach(({ link, path }) => {
             const isSelected = link._index === highlightedEdgeIndex;
-            path.classed("visible", isSelected);
-            path.classed("directed", isSelected && graphData.directed);
+            const isOnPath = link.onPath;
+            path.classed("visible", isSelected || isOnPath);
+            path.classed("directed", (isSelected || isOnPath) && graphData.directed);
+            path.classed("highlighted", isSelected && !isOnPath);
         });
     }
 
