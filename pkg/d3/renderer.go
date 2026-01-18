@@ -1072,6 +1072,25 @@ const htmlTemplate = `<!DOCTYPE html>
         if (typeof simulation !== 'undefined' && selectedNodeId !== previousSelectedNodeId) {
             const wasSelected = previousSelectedNodeId !== null;
             const isNowSelected = selectedNodeId !== null;
+
+            // Unfix previously selected node (if any)
+            if (wasSelected && !positionsLocked) {
+                const prevNode = graphData.nodes.find(n => n.id === previousSelectedNodeId);
+                if (prevNode) {
+                    prevNode.fx = null;
+                    prevNode.fy = null;
+                }
+            }
+
+            // Fix newly selected node at its current position
+            if (isNowSelected) {
+                const newNode = graphData.nodes.find(n => n.id === selectedNodeId);
+                if (newNode) {
+                    newNode.fx = newNode.x;
+                    newNode.fy = newNode.y;
+                }
+            }
+
             previousSelectedNodeId = selectedNodeId;
 
             // Update the link distance function
@@ -1512,9 +1531,12 @@ const htmlTemplate = `<!DOCTYPE html>
         nodeNeighbors.get(targetId).add(sourceId);
     });
 
-    // Custom force: extra repulsion between neighbors of selected node
-    function neighborRepulsionForce(alpha) {
+    // Custom force: distribute neighbors evenly around selected node
+    function neighborDistributionForce(alpha) {
         if (!selectedNodeId) return;
+
+        const selectedNode = graphData.nodes.find(n => n.id === selectedNodeId);
+        if (!selectedNode) return;
 
         const neighbors = nodeNeighbors.get(selectedNodeId);
         if (!neighbors || neighbors.size < 2) return;
@@ -1522,29 +1544,40 @@ const htmlTemplate = `<!DOCTYPE html>
         // Get neighbor node objects
         const neighborNodes = graphData.nodes.filter(n => neighbors.has(n.id));
 
-        // Apply repulsion between all pairs of neighbors
-        const repulsionStrength = 800; // Extra repulsion strength
+        // Calculate the current angle of each neighbor relative to selected node
+        const neighborsWithAngles = neighborNodes.map(node => {
+            const dx = node.x - selectedNode.x;
+            const dy = node.y - selectedNode.y;
+            const angle = Math.atan2(dy, dx);
+            const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+            return { node, angle, dist };
+        });
 
-        for (let i = 0; i < neighborNodes.length; i++) {
-            for (let j = i + 1; j < neighborNodes.length; j++) {
-                const nodeA = neighborNodes[i];
-                const nodeB = neighborNodes[j];
+        // Sort by current angle to maintain relative ordering
+        neighborsWithAngles.sort((a, b) => a.angle - b.angle);
 
-                const dx = nodeB.x - nodeA.x;
-                const dy = nodeB.y - nodeA.y;
-                const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+        // Calculate ideal evenly-spaced angles
+        const angleStep = (2 * Math.PI) / neighborNodes.length;
+        // Start from the average current angle to minimize disruption
+        const avgAngle = neighborsWithAngles.reduce((sum, n) => sum + n.angle, 0) / neighborNodes.length;
 
-                // Apply repulsion force inversely proportional to distance
-                const force = alpha * repulsionStrength / (dist * dist);
-                const fx = (dx / dist) * force;
-                const fy = (dy / dist) * force;
+        // Apply force to push each neighbor toward its ideal angular position
+        const angularStrength = 0.3; // How strongly to enforce even distribution
 
-                nodeA.vx -= fx;
-                nodeA.vy -= fy;
-                nodeB.vx += fx;
-                nodeB.vy += fy;
-            }
-        }
+        neighborsWithAngles.forEach((item, i) => {
+            const idealAngle = avgAngle + (i - (neighborNodes.length - 1) / 2) * angleStep;
+
+            // Calculate ideal position at current distance
+            const idealX = selectedNode.x + Math.cos(idealAngle) * item.dist;
+            const idealY = selectedNode.y + Math.sin(idealAngle) * item.dist;
+
+            // Apply force toward ideal position
+            const dx = idealX - item.node.x;
+            const dy = idealY - item.node.y;
+
+            item.node.vx += dx * alpha * angularStrength;
+            item.node.vy += dy * alpha * angularStrength;
+        });
     }
 
     const simulation = d3.forceSimulation(graphData.nodes)
@@ -1554,7 +1587,7 @@ const htmlTemplate = `<!DOCTYPE html>
         .force("charge", d3.forceManyBody().strength(-400))
         .force("center", d3.forceCenter(width / 2, height / 2))
         .force("collision", d3.forceCollide().radius(40))
-        .force("neighborRepulsion", neighborRepulsionForce);
+        .force("neighborDistribution", neighborDistributionForce);
 
     // Clustering forces - attract nodes within same cluster, repel different clusters
     const clusterAttractionStrength = 0.15;
