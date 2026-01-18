@@ -781,16 +781,72 @@ const htmlTemplate = `<!DOCTYPE html>
             font-weight: 500;
             color: #333;
         }
-        .selected-node {
+        .node-search-container {
+            position: relative;
+        }
+        .node-search-input {
+            width: 100%;
             font-size: 13px;
             color: #333;
             padding: 8px 10px;
             background: #f5f5f5;
+            border: 1px solid transparent;
             border-radius: 4px;
+            outline: none;
+            box-sizing: border-box;
         }
-        .selected-node.none {
+        .node-search-input:focus {
+            border-color: #4a90d9;
+            background: white;
+        }
+        .node-search-input::placeholder {
             color: #999;
             font-style: italic;
+        }
+        .search-results {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 0;
+            background: white;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            max-height: 200px;
+            overflow-y: auto;
+            z-index: 1000;
+            display: none;
+        }
+        .search-results.visible {
+            display: block;
+        }
+        .search-result-item {
+            padding: 8px 10px;
+            cursor: pointer;
+            font-size: 13px;
+            border-bottom: 1px solid #eee;
+        }
+        .search-result-item:last-child {
+            border-bottom: none;
+        }
+        .search-result-item:hover,
+        .search-result-item.selected {
+            background: #f0f7ff;
+        }
+        .search-result-item .match {
+            background: #fff3cd;
+            font-weight: 600;
+        }
+        .search-result-item .node-id {
+            color: #999;
+            font-size: 11px;
+            margin-left: 6px;
+        }
+        .search-no-results {
+            padding: 8px 10px;
+            color: #999;
+            font-style: italic;
+            font-size: 13px;
         }
         .clear-btn {
             margin-top: 8px;
@@ -850,7 +906,10 @@ const htmlTemplate = `<!DOCTYPE html>
         <h3>Graph Filter</h3>
         <div class="control-group">
             <label>Selected Node</label>
-            <div class="selected-node none" id="selected-display">Click a node to select</div>
+            <div class="node-search-container">
+                <input type="text" class="node-search-input" id="node-search" placeholder="Search or click a node...">
+                <div class="search-results" id="search-results"></div>
+            </div>
             <button class="clear-btn" id="clear-selection" style="display: none;">Clear Selection</button>
         </div>
         <div class="control-group">
@@ -975,17 +1034,16 @@ const htmlTemplate = `<!DOCTYPE html>
         }
 
         // Update UI
-        const selectedDisplay = document.getElementById("selected-display");
+        const nodeSearchInput = document.getElementById("node-search");
         const clearBtn = document.getElementById("clear-selection");
 
         if (selectedNodeId) {
             const selectedNode = graphData.nodes.find(n => n.id === selectedNodeId);
-            selectedDisplay.textContent = selectedNode ? (selectedNode.label || selectedNode.id) : selectedNodeId;
-            selectedDisplay.classList.remove("none");
+            nodeSearchInput.value = selectedNode ? (selectedNode.label || selectedNode.id) : selectedNodeId;
             clearBtn.style.display = "block";
         } else {
-            selectedDisplay.textContent = "Click a node to select";
-            selectedDisplay.classList.add("none");
+            nodeSearchInput.value = "";
+            nodeSearchInput.placeholder = "Search or click a node...";
             clearBtn.style.display = "none";
         }
 
@@ -1015,6 +1073,249 @@ const htmlTemplate = `<!DOCTYPE html>
     document.getElementById("clear-selection").addEventListener("click", function() {
         selectedNodeId = null;
         updateFilter();
+        document.getElementById("search-results").classList.remove("visible");
+    });
+
+    // Fuzzy search functionality
+    const nodeSearchInput = document.getElementById("node-search");
+    const searchResults = document.getElementById("search-results");
+    let selectedResultIndex = -1;
+
+    // Fuzzy match function - returns score (higher is better) or -1 if no match
+    function fuzzyMatch(text, query) {
+        text = text.toLowerCase();
+        query = query.toLowerCase();
+
+        // Exact match gets highest score
+        if (text === query) return 1000;
+
+        // Starts with query gets high score
+        if (text.startsWith(query)) return 500 + (query.length / text.length) * 100;
+
+        // Contains query as substring
+        const index = text.indexOf(query);
+        if (index !== -1) return 200 + (query.length / text.length) * 100 - index;
+
+        // Fuzzy character matching
+        let score = 0;
+        let textIndex = 0;
+        let consecutive = 0;
+
+        for (let i = 0; i < query.length; i++) {
+            const char = query[i];
+            const foundIndex = text.indexOf(char, textIndex);
+            if (foundIndex === -1) return -1; // Character not found
+
+            // Bonus for consecutive matches
+            if (foundIndex === textIndex) {
+                consecutive++;
+                score += consecutive * 2;
+            } else {
+                consecutive = 0;
+                score += 1;
+            }
+
+            // Penalty for gaps
+            score -= (foundIndex - textIndex) * 0.5;
+
+            textIndex = foundIndex + 1;
+        }
+
+        return Math.max(0, score);
+    }
+
+    // Highlight matched characters in text
+    function highlightMatch(text, query) {
+        if (!query) return text;
+
+        const lowerText = text.toLowerCase();
+        const lowerQuery = query.toLowerCase();
+
+        // Try substring match first
+        const index = lowerText.indexOf(lowerQuery);
+        if (index !== -1) {
+            return text.slice(0, index) +
+                '<span class="match">' + text.slice(index, index + query.length) + '</span>' +
+                text.slice(index + query.length);
+        }
+
+        // Fuzzy highlight
+        let result = '';
+        let textIndex = 0;
+
+        for (let i = 0; i < query.length; i++) {
+            const char = lowerQuery[i];
+            const foundIndex = lowerText.indexOf(char, textIndex);
+            if (foundIndex !== -1) {
+                result += text.slice(textIndex, foundIndex);
+                result += '<span class="match">' + text[foundIndex] + '</span>';
+                textIndex = foundIndex + 1;
+            }
+        }
+        result += text.slice(textIndex);
+
+        return result;
+    }
+
+    // Search nodes and return sorted results
+    function searchNodes(query) {
+        if (!query.trim()) return [];
+
+        const results = [];
+        graphData.nodes.forEach(node => {
+            const label = node.label || node.id;
+            const labelScore = fuzzyMatch(label, query);
+            const idScore = fuzzyMatch(node.id, query);
+            const score = Math.max(labelScore, idScore);
+
+            if (score > 0) {
+                results.push({ node, score, matchedOn: labelScore >= idScore ? 'label' : 'id' });
+            }
+        });
+
+        // Sort by score descending
+        results.sort((a, b) => b.score - a.score);
+
+        return results.slice(0, 10); // Limit to 10 results
+    }
+
+    // Render search results
+    function renderSearchResults(results, query) {
+        searchResults.innerHTML = '';
+        selectedResultIndex = -1;
+
+        if (results.length === 0) {
+            searchResults.innerHTML = '<div class="search-no-results">No matching nodes</div>';
+            searchResults.classList.add("visible");
+            return;
+        }
+
+        results.forEach((result, index) => {
+            const item = document.createElement("div");
+            item.className = "search-result-item";
+            item.dataset.index = index;
+            item.dataset.nodeId = result.node.id;
+
+            const label = result.node.label || result.node.id;
+            let html = highlightMatch(label, query);
+
+            // Show ID if different from label
+            if (result.node.label && result.node.id !== result.node.label) {
+                html += '<span class="node-id">(' + result.node.id + ')</span>';
+            }
+
+            item.innerHTML = html;
+
+            item.addEventListener("click", function() {
+                selectNodeAndZoom(result.node);
+            });
+
+            item.addEventListener("mouseenter", function() {
+                selectedResultIndex = index;
+                updateSelectedResult();
+            });
+
+            searchResults.appendChild(item);
+        });
+
+        searchResults.classList.add("visible");
+    }
+
+    // Update visual selection in results
+    function updateSelectedResult() {
+        const items = searchResults.querySelectorAll(".search-result-item");
+        items.forEach((item, index) => {
+            item.classList.toggle("selected", index === selectedResultIndex);
+        });
+    }
+
+    // Select a node and zoom to it
+    function selectNodeAndZoom(nodeData) {
+        selectedNodeId = nodeData.id;
+        updateFilter();
+        searchResults.classList.remove("visible");
+
+        // Zoom to the selected node
+        const scale = 1.5;
+        const x = nodeData.x;
+        const y = nodeData.y;
+
+        svg.transition()
+            .duration(500)
+            .call(
+                zoom.transform,
+                d3.zoomIdentity
+                    .translate(width / 2, height / 2)
+                    .scale(scale)
+                    .translate(-x, -y)
+            );
+    }
+
+    // Input event handler
+    nodeSearchInput.addEventListener("input", function() {
+        const query = this.value;
+        if (query.trim()) {
+            const results = searchNodes(query);
+            renderSearchResults(results, query);
+        } else {
+            searchResults.classList.remove("visible");
+        }
+    });
+
+    // Focus event - show results if there's a query
+    nodeSearchInput.addEventListener("focus", function() {
+        const query = this.value;
+        if (query.trim()) {
+            const results = searchNodes(query);
+            renderSearchResults(results, query);
+        }
+    });
+
+    // Keyboard navigation
+    nodeSearchInput.addEventListener("keydown", function(event) {
+        const items = searchResults.querySelectorAll(".search-result-item");
+
+        if (event.key === "ArrowDown") {
+            event.preventDefault();
+            if (items.length > 0) {
+                selectedResultIndex = Math.min(selectedResultIndex + 1, items.length - 1);
+                updateSelectedResult();
+                items[selectedResultIndex].scrollIntoView({ block: "nearest" });
+            }
+        } else if (event.key === "ArrowUp") {
+            event.preventDefault();
+            if (items.length > 0) {
+                selectedResultIndex = Math.max(selectedResultIndex - 1, 0);
+                updateSelectedResult();
+                items[selectedResultIndex].scrollIntoView({ block: "nearest" });
+            }
+        } else if (event.key === "Enter") {
+            event.preventDefault();
+            if (selectedResultIndex >= 0 && selectedResultIndex < items.length) {
+                const nodeId = items[selectedResultIndex].dataset.nodeId;
+                const nodeData = graphData.nodes.find(n => n.id === nodeId);
+                if (nodeData) {
+                    selectNodeAndZoom(nodeData);
+                }
+            } else if (items.length > 0) {
+                // Select first result if none selected
+                const nodeId = items[0].dataset.nodeId;
+                const nodeData = graphData.nodes.find(n => n.id === nodeId);
+                if (nodeData) {
+                    selectNodeAndZoom(nodeData);
+                }
+            }
+        } else if (event.key === "Escape") {
+            searchResults.classList.remove("visible");
+            this.blur();
+        }
+    });
+
+    // Close results when clicking outside
+    document.addEventListener("click", function(event) {
+        if (!event.target.closest(".node-search-container")) {
+            searchResults.classList.remove("visible");
+        }
     });
 
     // Lock positions checkbox
