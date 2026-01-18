@@ -577,7 +577,8 @@ const htmlTemplate = `<!DOCTYPE html>
         .node:hover { filter: brightness(0.85); }
         .node.selected ellipse,
         .node.selected rect,
-        .node.selected polygon {
+        .node.selected polygon,
+        .node.selected circle {
             stroke: #ff6b00;
             stroke-width: 3;
         }
@@ -699,7 +700,8 @@ const htmlTemplate = `<!DOCTYPE html>
         /* Path highlighting - orange for valid path */
         .node.on-path ellipse,
         .node.on-path rect,
-        .node.on-path polygon {
+        .node.on-path polygon,
+        .node.on-path circle {
             stroke: #ff6b00;
             stroke-width: 4;
         }
@@ -714,7 +716,8 @@ const htmlTemplate = `<!DOCTYPE html>
         /* Path invalid node - red highlight */
         .node.path-invalid ellipse,
         .node.path-invalid rect,
-        .node.path-invalid polygon {
+        .node.path-invalid polygon,
+        .node.path-invalid circle {
             stroke: #f44336;
             stroke-width: 5;
         }
@@ -2047,7 +2050,7 @@ const htmlTemplate = `<!DOCTYPE html>
     // Color scale for nodes without explicit colors
     const colorScale = d3.scaleOrdinal(d3.schemeTableau10);
 
-    // Node shapes
+    // Node shapes - supporting common Graphviz shapes
     node.each(function(d) {
         const el = d3.select(this);
         const shape = (d.shape || "ellipse").toLowerCase();
@@ -2067,14 +2070,156 @@ const htmlTemplate = `<!DOCTYPE html>
                 .attr("fill", fillColor)
                 .attr("stroke", strokeColor)
                 .attr("stroke-width", 1.5);
-        } else if (shape === "diamond") {
-            el.append("polygon")
-                .attr("points", "0,-20 20,0 0,20 -20,0")
+        } else if (shape === "circle") {
+            el.append("circle")
+                .attr("r", 20)
                 .attr("fill", fillColor)
                 .attr("stroke", strokeColor)
                 .attr("stroke-width", 1.5);
+        } else if (shape === "point") {
+            el.append("circle")
+                .attr("r", 5)
+                .attr("fill", strokeColor)
+                .attr("stroke", strokeColor)
+                .attr("stroke-width", 1);
+        } else if (shape === "diamond") {
+            el.append("polygon")
+                .attr("points", "0,-20 25,0 0,20 -25,0")
+                .attr("fill", fillColor)
+                .attr("stroke", strokeColor)
+                .attr("stroke-width", 1.5);
+        } else if (shape === "triangle" || shape === "invtriangle") {
+            const points = shape === "invtriangle"
+                ? "-25,-15 25,-15 0,20"  // pointing down
+                : "-25,15 25,15 0,-20";   // pointing up
+            el.append("polygon")
+                .attr("points", points)
+                .attr("fill", fillColor)
+                .attr("stroke", strokeColor)
+                .attr("stroke-width", 1.5);
+        } else if (shape === "hexagon") {
+            el.append("polygon")
+                .attr("points", "-25,0 -12,-18 12,-18 25,0 12,18 -12,18")
+                .attr("fill", fillColor)
+                .attr("stroke", strokeColor)
+                .attr("stroke-width", 1.5);
+        } else if (shape === "octagon") {
+            el.append("polygon")
+                .attr("points", "-10,-20 10,-20 22,-10 22,10 10,20 -10,20 -22,10 -22,-10")
+                .attr("fill", fillColor)
+                .attr("stroke", strokeColor)
+                .attr("stroke-width", 1.5);
+        } else if (shape === "pentagon") {
+            el.append("polygon")
+                .attr("points", "0,-20 22,-6 14,18 -14,18 -22,-6")
+                .attr("fill", fillColor)
+                .attr("stroke", strokeColor)
+                .attr("stroke-width", 1.5);
+        } else if (shape === "house") {
+            el.append("polygon")
+                .attr("points", "-25,18 -25,-5 0,-20 25,-5 25,18")
+                .attr("fill", fillColor)
+                .attr("stroke", strokeColor)
+                .attr("stroke-width", 1.5);
+        } else if (shape === "invhouse") {
+            el.append("polygon")
+                .attr("points", "-25,-18 -25,5 0,20 25,5 25,-18")
+                .attr("fill", fillColor)
+                .attr("stroke", strokeColor)
+                .attr("stroke-width", 1.5);
+        } else if (shape === "parallelogram") {
+            el.append("polygon")
+                .attr("points", "-18,-15 28,-15 18,15 -28,15")
+                .attr("fill", fillColor)
+                .attr("stroke", strokeColor)
+                .attr("stroke-width", 1.5);
+        } else if (shape === "trapezium") {
+            el.append("polygon")
+                .attr("points", "-18,-15 18,-15 28,15 -28,15")
+                .attr("fill", fillColor)
+                .attr("stroke", strokeColor)
+                .attr("stroke-width", 1.5);
+        } else if (shape === "cylinder") {
+            // Cylinder: rectangle with elliptical top and bottom
+            const g = el.append("g");
+            // Bottom ellipse (partial, just the visible bottom curve)
+            g.append("ellipse")
+                .attr("cx", 0)
+                .attr("cy", 15)
+                .attr("rx", 25)
+                .attr("ry", 6)
+                .attr("fill", fillColor)
+                .attr("stroke", strokeColor)
+                .attr("stroke-width", 1.5);
+            // Body rectangle
+            g.append("rect")
+                .attr("x", -25)
+                .attr("y", -15)
+                .attr("width", 50)
+                .attr("height", 30)
+                .attr("fill", fillColor)
+                .attr("stroke", "none");
+            // Side lines
+            g.append("line")
+                .attr("x1", -25).attr("y1", -15)
+                .attr("x2", -25).attr("y2", 15)
+                .attr("stroke", strokeColor)
+                .attr("stroke-width", 1.5);
+            g.append("line")
+                .attr("x1", 25).attr("y1", -15)
+                .attr("x2", 25).attr("y2", 15)
+                .attr("stroke", strokeColor)
+                .attr("stroke-width", 1.5);
+            // Top ellipse
+            g.append("ellipse")
+                .attr("cx", 0)
+                .attr("cy", -15)
+                .attr("rx", 25)
+                .attr("ry", 6)
+                .attr("fill", fillColor)
+                .attr("stroke", strokeColor)
+                .attr("stroke-width", 1.5);
+        } else if (shape === "plaintext" || shape === "plain" || shape === "none") {
+            // No shape, just the label
+        } else if (shape === "star") {
+            // 5-pointed star
+            const outerR = 22, innerR = 10;
+            let points = "";
+            for (let i = 0; i < 5; i++) {
+                const outerAngle = (i * 72 - 90) * Math.PI / 180;
+                const innerAngle = ((i * 72) + 36 - 90) * Math.PI / 180;
+                points += Math.cos(outerAngle) * outerR + "," + Math.sin(outerAngle) * outerR + " ";
+                points += Math.cos(innerAngle) * innerR + "," + Math.sin(innerAngle) * innerR + " ";
+            }
+            el.append("polygon")
+                .attr("points", points.trim())
+                .attr("fill", fillColor)
+                .attr("stroke", strokeColor)
+                .attr("stroke-width", 1.5);
+        } else if (shape === "doublecircle") {
+            el.append("circle")
+                .attr("r", 22)
+                .attr("fill", fillColor)
+                .attr("stroke", strokeColor)
+                .attr("stroke-width", 1.5);
+            el.append("circle")
+                .attr("r", 17)
+                .attr("fill", "none")
+                .attr("stroke", strokeColor)
+                .attr("stroke-width", 1.5);
+        } else if (shape === "doubleoctagon") {
+            el.append("polygon")
+                .attr("points", "-10,-22 10,-22 24,-10 24,10 10,22 -10,22 -24,10 -24,-10")
+                .attr("fill", fillColor)
+                .attr("stroke", strokeColor)
+                .attr("stroke-width", 1.5);
+            el.append("polygon")
+                .attr("points", "-8,-17 8,-17 19,-8 19,8 8,17 -8,17 -19,8 -19,-8")
+                .attr("fill", "none")
+                .attr("stroke", strokeColor)
+                .attr("stroke-width", 1.5);
         } else {
-            // Default: ellipse/circle
+            // Default: ellipse/oval
             el.append("ellipse")
                 .attr("rx", 25)
                 .attr("ry", 18)
