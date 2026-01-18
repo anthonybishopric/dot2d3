@@ -633,6 +633,18 @@ const htmlTemplate = `<!DOCTYPE html>
             stroke-opacity: 1;
             stroke-width: 3;
         }
+        .unified-link.on-path {
+            stroke: #ff6b00 !important;
+            stroke-opacity: 1;
+            stroke-width: 4;
+        }
+        .unified-link.directed.on-path {
+            marker-end: url(#arrowhead-path);
+        }
+        .unified-link.bidirectional.on-path {
+            marker-start: url(#arrowhead-path-reverse);
+            marker-end: url(#arrowhead-path);
+        }
         /* Curved edge shown when a specific edge label is selected */
         .curved-edge {
             fill: none;
@@ -1420,6 +1432,19 @@ const htmlTemplate = `<!DOCTYPE html>
             .append("path")
             .attr("d", "M0,-5L10,0L0,5")
             .attr("fill", "#ff6b00");
+
+        // Reverse path arrowhead (orange, for bidirectional on-path edges)
+        defs.append("marker")
+            .attr("id", "arrowhead-path-reverse")
+            .attr("viewBox", "0 -5 10 10")
+            .attr("refX", -15)
+            .attr("refY", 0)
+            .attr("markerWidth", 8)
+            .attr("markerHeight", 8)
+            .attr("orient", "auto")
+            .append("path")
+            .attr("d", "M10,-5L0,0L10,5")
+            .attr("fill", "#ff6b00");
     }
 
     // Force simulation
@@ -1725,8 +1750,10 @@ const htmlTemplate = `<!DOCTYPE html>
             if (d.isBidirectional) cls += " bidirectional";
             return cls;
         })
-        .attr("stroke", "#999")
-        .attr("stroke-width", 2);
+        .classed("on-path", d => d.links.some(l => l.onPath))
+        .classed("dimmed", d => hasPath && !d.links.some(l => l.onPath))
+        .attr("stroke", d => d.links.some(l => l.onPath) ? "#ff6b00" : "#999")
+        .attr("stroke-width", d => d.links.some(l => l.onPath) ? 4 : 2);
 
     // Draw curved paths for each edge in multi-edge groups (initially hidden)
     const curvedEdges = [];
