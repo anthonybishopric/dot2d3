@@ -960,6 +960,7 @@ const htmlTemplate = `<!DOCTYPE html>
 
     // State for filtering
     let selectedNodeId = null;
+    let previousSelectedNodeId = null; // Track previous selection to detect changes
     let degreeFilter = 1; // 0 means "All" (no filter), default to 1
     let positionsLocked = false; // When true, simulation is stopped but dragging still works
 
@@ -1064,6 +1065,23 @@ const htmlTemplate = `<!DOCTYPE html>
             nodeSearchInput.value = "";
             nodeSearchInput.placeholder = "Search or click a node...";
             clearBtn.style.display = "none";
+        }
+
+        // Update link distances when selection changes
+        // Only restart simulation when selecting (to expand), not when deselecting
+        if (typeof simulation !== 'undefined' && selectedNodeId !== previousSelectedNodeId) {
+            const wasSelected = previousSelectedNodeId !== null;
+            const isNowSelected = selectedNodeId !== null;
+            previousSelectedNodeId = selectedNodeId;
+
+            // Update the link distance function
+            simulation.force("link").distance(getLinkDistance);
+
+            // Only restart simulation if selecting a node and not locked
+            // On deselection, let the graph stay where it is
+            if (isNowSelected && !positionsLocked) {
+                simulation.alpha(0.3).restart();
+            }
         }
 
         // Emit filter change event
@@ -1455,13 +1473,88 @@ const htmlTemplate = `<!DOCTYPE html>
     }
 
     // Force simulation
+    const defaultLinkDistance = 120;
+    const minSelectedLinkDistance = 150; // Minimum expansion for low-degree nodes
+    const maxSelectedLinkDistance = 300; // Maximum expansion for high-degree nodes
+
+    // Calculate degree (number of connections) for each node
+    const nodeDegrees = new Map();
+    graphData.nodes.forEach(n => nodeDegrees.set(n.id, 0));
+    graphData.links.forEach(l => {
+        const sourceId = typeof l.source === 'object' ? l.source.id : l.source;
+        const targetId = typeof l.target === 'object' ? l.target.id : l.target;
+        nodeDegrees.set(sourceId, (nodeDegrees.get(sourceId) || 0) + 1);
+        nodeDegrees.set(targetId, (nodeDegrees.get(targetId) || 0) + 1);
+    });
+
+    // Dynamic link distance function - expands more for higher-degree nodes
+    function getLinkDistance(d) {
+        if (!selectedNodeId) return defaultLinkDistance;
+        const sourceId = typeof d.source === 'object' ? d.source.id : d.source;
+        const targetId = typeof d.target === 'object' ? d.target.id : d.target;
+        if (sourceId === selectedNodeId || targetId === selectedNodeId) {
+            // Scale distance based on degree: more connections = more space needed
+            const degree = nodeDegrees.get(selectedNodeId) || 1;
+            // Scale from minSelectedLinkDistance (degree 1-2) to maxSelectedLinkDistance (degree 10+)
+            const scaleFactor = Math.min(1, (degree - 1) / 9); // 0 at degree 1, 1 at degree 10+
+            return minSelectedLinkDistance + scaleFactor * (maxSelectedLinkDistance - minSelectedLinkDistance);
+        }
+        return defaultLinkDistance;
+    }
+
+    // Build neighbor lookup for each node
+    const nodeNeighbors = new Map();
+    graphData.nodes.forEach(n => nodeNeighbors.set(n.id, new Set()));
+    graphData.links.forEach(l => {
+        const sourceId = typeof l.source === 'object' ? l.source.id : l.source;
+        const targetId = typeof l.target === 'object' ? l.target.id : l.target;
+        nodeNeighbors.get(sourceId).add(targetId);
+        nodeNeighbors.get(targetId).add(sourceId);
+    });
+
+    // Custom force: extra repulsion between neighbors of selected node
+    function neighborRepulsionForce(alpha) {
+        if (!selectedNodeId) return;
+
+        const neighbors = nodeNeighbors.get(selectedNodeId);
+        if (!neighbors || neighbors.size < 2) return;
+
+        // Get neighbor node objects
+        const neighborNodes = graphData.nodes.filter(n => neighbors.has(n.id));
+
+        // Apply repulsion between all pairs of neighbors
+        const repulsionStrength = 800; // Extra repulsion strength
+
+        for (let i = 0; i < neighborNodes.length; i++) {
+            for (let j = i + 1; j < neighborNodes.length; j++) {
+                const nodeA = neighborNodes[i];
+                const nodeB = neighborNodes[j];
+
+                const dx = nodeB.x - nodeA.x;
+                const dy = nodeB.y - nodeA.y;
+                const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+
+                // Apply repulsion force inversely proportional to distance
+                const force = alpha * repulsionStrength / (dist * dist);
+                const fx = (dx / dist) * force;
+                const fy = (dy / dist) * force;
+
+                nodeA.vx -= fx;
+                nodeA.vy -= fy;
+                nodeB.vx += fx;
+                nodeB.vy += fy;
+            }
+        }
+    }
+
     const simulation = d3.forceSimulation(graphData.nodes)
         .force("link", d3.forceLink(graphData.links)
             .id(d => d.id)
-            .distance(120))
+            .distance(getLinkDistance))
         .force("charge", d3.forceManyBody().strength(-400))
         .force("center", d3.forceCenter(width / 2, height / 2))
-        .force("collision", d3.forceCollide().radius(40));
+        .force("collision", d3.forceCollide().radius(40))
+        .force("neighborRepulsion", neighborRepulsionForce);
 
     // Clustering forces - attract nodes within same cluster, repel different clusters
     const clusterAttractionStrength = 0.15;
