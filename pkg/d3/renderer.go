@@ -619,6 +619,54 @@ const htmlTemplate = `<!DOCTYPE html>
             fill: #ff6b00;
             font-weight: 600;
         }
+        /* Unified edge for multi-edge node pairs */
+        .unified-link {
+            stroke-opacity: 0.6;
+            fill: none;
+        }
+        .unified-link.bidirectional {
+            marker-start: url(#arrowhead-reverse);
+            marker-end: url(#arrowhead);
+        }
+        .unified-link.highlighted {
+            stroke: #ff6b00 !important;
+            stroke-opacity: 1;
+            stroke-width: 3;
+        }
+        /* Curved edge shown when a specific edge label is selected */
+        .curved-edge {
+            fill: none;
+            stroke-opacity: 0;
+            pointer-events: none;
+            transition: stroke-opacity 0.15s;
+        }
+        .curved-edge.visible {
+            stroke-opacity: 1;
+            stroke-width: 3;
+        }
+        .curved-edge.directed {
+            marker-end: url(#arrowhead-curved);
+        }
+        /* Multi-edge label container */
+        .multi-edge-labels {
+            pointer-events: all;
+        }
+        .multi-edge-label {
+            font-size: 10px;
+            fill: #666;
+            cursor: pointer;
+            transition: fill 0.15s;
+        }
+        .multi-edge-label:hover {
+            fill: #333;
+        }
+        .multi-edge-label.highlighted {
+            fill: #ff6b00;
+            font-weight: 600;
+        }
+        .unified-link.filtered-out { opacity: 0.08; }
+        .multi-edge-labels.filtered-out { opacity: 0.15; }
+        .curved-edge.filtered-out { opacity: 0.08; }
         /* Dimmed elements - use opacity to preserve custom colors */
         .node.dimmed {
             opacity: 0.25;
@@ -882,21 +930,49 @@ const htmlTemplate = `<!DOCTYPE html>
         // Update selected state
         node.classed("selected", d => d.id === selectedNodeId);
 
-        // Update link visibility
-        link.classed("filtered-out", d => {
-            if (!visibleNodes) return false;
-            const sourceId = typeof d.source === 'object' ? d.source.id : d.source;
-            const targetId = typeof d.target === 'object' ? d.target.id : d.target;
-            return !visibleNodes.has(sourceId) || !visibleNodes.has(targetId);
-        });
+        // Update single-edge link visibility
+        if (typeof link !== 'undefined') {
+            link.classed("filtered-out", d => {
+                if (!visibleNodes) return false;
+                const sourceId = typeof d.source === 'object' ? d.source.id : d.source;
+                const targetId = typeof d.target === 'object' ? d.target.id : d.target;
+                return !visibleNodes.has(sourceId) || !visibleNodes.has(targetId);
+            });
+        }
 
-        // Update link label visibility
-        linkLabel.classed("filtered-out", d => {
-            if (!visibleNodes) return false;
-            const sourceId = typeof d.source === 'object' ? d.source.id : d.source;
-            const targetId = typeof d.target === 'object' ? d.target.id : d.target;
-            return !visibleNodes.has(sourceId) || !visibleNodes.has(targetId);
-        });
+        // Update unified link visibility (for multi-edge groups)
+        if (typeof unifiedLinks !== 'undefined') {
+            unifiedLinks.classed("filtered-out", d => {
+                if (!visibleNodes) return false;
+                return !visibleNodes.has(d.nodeA) || !visibleNodes.has(d.nodeB);
+            });
+        }
+
+        // Update single-edge link label visibility
+        if (typeof linkLabel !== 'undefined') {
+            linkLabel.classed("filtered-out", d => {
+                if (!visibleNodes) return false;
+                const sourceId = typeof d.source === 'object' ? d.source.id : d.source;
+                const targetId = typeof d.target === 'object' ? d.target.id : d.target;
+                return !visibleNodes.has(sourceId) || !visibleNodes.has(targetId);
+            });
+        }
+
+        // Update multi-edge label visibility
+        if (typeof multiEdgeLabelContainers !== 'undefined') {
+            multiEdgeLabelContainers.forEach(({ container, group }) => {
+                const isFiltered = visibleNodes && (!visibleNodes.has(group.nodeA) || !visibleNodes.has(group.nodeB));
+                container.classed("filtered-out", isFiltered);
+            });
+        }
+
+        // Update curved edges visibility
+        if (typeof curvedEdges !== 'undefined') {
+            curvedEdges.forEach(({ link, path, group }) => {
+                const isFiltered = visibleNodes && (!visibleNodes.has(group.nodeA) || !visibleNodes.has(group.nodeB));
+                path.classed("filtered-out", isFiltered);
+            });
+        }
 
         // Update UI
         const selectedDisplay = document.getElementById("selected-display");
@@ -1013,6 +1089,32 @@ const htmlTemplate = `<!DOCTYPE html>
             .attr("refY", 0)
             .attr("markerWidth", 8)
             .attr("markerHeight", 8)
+            .attr("orient", "auto")
+            .append("path")
+            .attr("d", "M0,-5L10,0L0,5")
+            .attr("fill", "#ff6b00");
+
+        // Reverse arrowhead (for bidirectional unified edges)
+        defs.append("marker")
+            .attr("id", "arrowhead-reverse")
+            .attr("viewBox", "0 -5 10 10")
+            .attr("refX", -15)
+            .attr("refY", 0)
+            .attr("markerWidth", 6)
+            .attr("markerHeight", 6)
+            .attr("orient", "auto")
+            .append("path")
+            .attr("d", "M10,-5L0,0L10,5")
+            .attr("fill", "#999");
+
+        // Arrowhead for curved edges (refX=0 since we'll adjust the path endpoint)
+        defs.append("marker")
+            .attr("id", "arrowhead-curved")
+            .attr("viewBox", "0 -5 10 10")
+            .attr("refX", 10)
+            .attr("refY", 0)
+            .attr("markerWidth", 6)
+            .attr("markerHeight", 6)
             .attr("orient", "auto")
             .append("path")
             .attr("d", "M0,-5L10,0L0,5")
@@ -1231,11 +1333,55 @@ const htmlTemplate = `<!DOCTYPE html>
         });
     }
 
-    // Draw links
+    // Detect multi-edge pairs and classify them
+    const edgePairs = new Map(); // key: "A|B" (sorted), value: { links: [], directions: Set }
+    graphData.links.forEach((l, i) => {
+        const sourceId = typeof l.source === 'object' ? l.source.id : l.source;
+        const targetId = typeof l.target === 'object' ? l.target.id : l.target;
+        const sortedKey = [sourceId, targetId].sort().join('|');
+        const directionKey = sourceId + '->' + targetId;
+
+        if (!edgePairs.has(sortedKey)) {
+            edgePairs.set(sortedKey, { links: [], directions: new Set(), sourceId: sortedKey.split('|')[0], targetId: sortedKey.split('|')[1] });
+        }
+        const pair = edgePairs.get(sortedKey);
+        pair.links.push(i);
+        pair.directions.add(directionKey);
+
+        l._index = i;
+        l._pairKey = sortedKey;
+    });
+
+    // Separate single-edge and multi-edge links
+    const singleEdgeLinks = [];
+    const multiEdgeGroups = [];
+
+    edgePairs.forEach((pair, key) => {
+        if (pair.links.length === 1) {
+            singleEdgeLinks.push(graphData.links[pair.links[0]]);
+        } else {
+            // Check if bidirectional (has edges in both directions)
+            const [nodeA, nodeB] = key.split('|');
+            const isBidirectional = pair.directions.has(nodeA + '->' + nodeB) && pair.directions.has(nodeB + '->' + nodeA);
+            multiEdgeGroups.push({
+                key,
+                nodeA,
+                nodeB,
+                linkIndices: pair.links,
+                links: pair.links.map(i => graphData.links[i]),
+                isBidirectional
+            });
+        }
+    });
+
+    // State for highlighted edge
+    let highlightedEdgeIndex = null;
+
+    // Draw single-edge links (unchanged behavior)
     const link = g.append("g")
         .attr("class", "links")
         .selectAll("line")
-        .data(graphData.links)
+        .data(singleEdgeLinks)
         .join("line")
         .attr("class", d => graphData.directed ? "link directed" : "link")
         .classed("on-path", d => d.onPath)
@@ -1245,7 +1391,6 @@ const htmlTemplate = `<!DOCTYPE html>
         .attr("stroke-dasharray", d => d.style === "dashed" ? "5,5" : null)
         .on("click", function(event, d) {
             event.stopPropagation();
-            // Toggle highlight
             if (highlightedEdgeIndex === d._index) {
                 highlightedEdgeIndex = null;
             } else {
@@ -1253,7 +1398,6 @@ const htmlTemplate = `<!DOCTYPE html>
             }
             updateEdgeHighlight();
 
-            // Emit custom event
             const customEvent = new CustomEvent("edgeClick", {
                 detail: {
                     source: typeof d.source === 'object' ? d.source.id : d.source,
@@ -1267,54 +1411,78 @@ const htmlTemplate = `<!DOCTYPE html>
             document.dispatchEvent(customEvent);
         });
 
-    // Detect bidirectional edges and assign label offsets
-    const edgePairs = new Map(); // key: "A|B" (sorted), value: array of link indices
-    graphData.links.forEach((l, i) => {
-        const sourceId = typeof l.source === 'object' ? l.source.id : l.source;
-        const targetId = typeof l.target === 'object' ? l.target.id : l.target;
-        const key = [sourceId, targetId].sort().join('|');
-        if (!edgePairs.has(key)) {
-            edgePairs.set(key, []);
-        }
-        edgePairs.get(key).push(i);
+    // Draw unified lines for multi-edge groups
+    const unifiedLinkGroup = g.append("g").attr("class", "unified-links");
+    const curvedEdgeGroup = g.append("g").attr("class", "curved-edges");
+
+    const unifiedLinks = unifiedLinkGroup.selectAll("line")
+        .data(multiEdgeGroups)
+        .join("line")
+        .attr("class", d => {
+            let cls = "unified-link";
+            if (graphData.directed) cls += " directed";
+            if (d.isBidirectional) cls += " bidirectional";
+            return cls;
+        })
+        .attr("stroke", "#999")
+        .attr("stroke-width", 2);
+
+    // Draw curved paths for each edge in multi-edge groups (initially hidden)
+    const curvedEdges = [];
+    multiEdgeGroups.forEach(group => {
+        // Track how many edges go in each direction for offset calculation
+        const directionCounts = { forward: 0, backward: 0 };
+
+        group.links.forEach((link) => {
+            const sourceId = typeof link.source === 'object' ? link.source.id : link.source;
+            const targetId = typeof link.target === 'object' ? link.target.id : link.target;
+
+            // Determine if this edge goes "forward" (nodeA -> nodeB) or "backward" (nodeB -> nodeA)
+            // based on the sorted key order
+            const isForward = sourceId === group.nodeA;
+
+            // Curve direction: forward edges curve one way, backward edges curve the other
+            const baseDirection = isForward ? 1 : -1;
+
+            // For multiple edges in the same direction, offset them further
+            const dirKey = isForward ? 'forward' : 'backward';
+            const sameDirectionIndex = directionCounts[dirKey];
+            directionCounts[dirKey]++;
+
+            // Offset increases for each additional edge in the same direction
+            const curveOffset = 40 + sameDirectionIndex * 25;
+            const curveDirection = baseDirection;
+
+            const path = curvedEdgeGroup.append("path")
+                .datum(link)
+                .attr("class", "curved-edge")
+                .attr("stroke", normalizeColor(link.color) || "#ff6b00")
+                .attr("stroke-width", 3);
+
+            curvedEdges.push({
+                link,
+                path,
+                curveDirection,
+                curveOffset,
+                group
+            });
+
+            link._curvedEdge = { path, curveDirection, curveOffset };
+        });
     });
 
-    // Assign offset index to each link for label positioning
-    graphData.links.forEach((l, i) => {
-        const sourceId = typeof l.source === 'object' ? l.source.id : l.source;
-        const targetId = typeof l.target === 'object' ? l.target.id : l.target;
-        const key = [sourceId, targetId].sort().join('|');
-        const pairLinks = edgePairs.get(key);
-        if (pairLinks.length > 1) {
-            // Multiple edges between same nodes
-            const idx = pairLinks.indexOf(i);
-            l._labelOffset = (idx - (pairLinks.length - 1) / 2) * 14; // 14px spacing
-        } else {
-            l._labelOffset = 0;
-        }
-        l._index = i; // Store index for highlighting
-    });
-
-    // State for highlighted edge
-    let highlightedEdgeIndex = null;
-
-    function updateEdgeHighlight() {
-        link.classed("highlighted", (d, i) => i === highlightedEdgeIndex);
-        linkLabel.classed("highlighted", d => d._index === highlightedEdgeIndex);
-    }
-
-    // Draw link labels
+    // Draw labels for single-edge links
+    const singleEdgeLabels = singleEdgeLinks.filter(d => d.label);
     const linkLabel = g.append("g")
         .attr("class", "link-labels")
         .selectAll("text")
-        .data(graphData.links.filter(d => d.label))
+        .data(singleEdgeLabels)
         .join("text")
         .attr("class", "link-label")
         .classed("dimmed", d => hasPath && !d.onPath)
         .text(d => d.label)
         .on("click", function(event, d) {
             event.stopPropagation();
-            // Toggle highlight
             if (highlightedEdgeIndex === d._index) {
                 highlightedEdgeIndex = null;
             } else {
@@ -1322,7 +1490,6 @@ const htmlTemplate = `<!DOCTYPE html>
             }
             updateEdgeHighlight();
 
-            // Emit custom event
             const customEvent = new CustomEvent("edgeLabelClick", {
                 detail: {
                     source: typeof d.source === 'object' ? d.source.id : d.source,
@@ -1334,6 +1501,68 @@ const htmlTemplate = `<!DOCTYPE html>
             });
             document.dispatchEvent(customEvent);
         });
+
+    // Draw stacked labels for multi-edge groups
+    const multiEdgeLabelGroup = g.append("g").attr("class", "multi-edge-label-groups");
+    const multiEdgeLabelContainers = [];
+
+    multiEdgeGroups.forEach(group => {
+        const container = multiEdgeLabelGroup.append("g")
+            .attr("class", "multi-edge-labels")
+            .datum(group);
+
+        const labelsWithData = group.links
+            .filter(l => l.label)
+            .map((l, idx) => ({ link: l, idx }));
+
+        const labels = container.selectAll("text")
+            .data(labelsWithData)
+            .join("text")
+            .attr("class", "multi-edge-label")
+            .classed("dimmed", d => hasPath && !d.link.onPath)
+            .text(d => d.link.label)
+            .attr("text-anchor", "middle")
+            .on("click", function(event, d) {
+                event.stopPropagation();
+                if (highlightedEdgeIndex === d.link._index) {
+                    highlightedEdgeIndex = null;
+                } else {
+                    highlightedEdgeIndex = d.link._index;
+                }
+                updateEdgeHighlight();
+
+                const customEvent = new CustomEvent("edgeLabelClick", {
+                    detail: {
+                        source: typeof d.link.source === 'object' ? d.link.source.id : d.link.source,
+                        target: typeof d.link.target === 'object' ? d.link.target.id : d.link.target,
+                        label: d.link.label,
+                        highlighted: highlightedEdgeIndex === d.link._index
+                    },
+                    bubbles: true
+                });
+                document.dispatchEvent(customEvent);
+            });
+
+        multiEdgeLabelContainers.push({ container, labels, group });
+    });
+
+    function updateEdgeHighlight() {
+        // Update single-edge highlights
+        link.classed("highlighted", d => d._index === highlightedEdgeIndex);
+        linkLabel.classed("highlighted", d => d._index === highlightedEdgeIndex);
+
+        // Update multi-edge highlights
+        multiEdgeLabelContainers.forEach(({ labels }) => {
+            labels.classed("highlighted", d => d.link._index === highlightedEdgeIndex);
+        });
+
+        // Show/hide curved edges (and their arrowheads)
+        curvedEdges.forEach(({ link, path }) => {
+            const isSelected = link._index === highlightedEdgeIndex;
+            path.classed("visible", isSelected);
+            path.classed("directed", isSelected && graphData.directed);
+        });
+    }
 
     // Draw nodes
     const node = g.append("g")
@@ -1479,23 +1708,8 @@ const htmlTemplate = `<!DOCTYPE html>
             if (positionsLocked) {
                 event.subject.x = event.x;
                 event.subject.y = event.y;
-                // Update link and node positions immediately
-                link
-                    .attr("x1", d => d.source.x)
-                    .attr("y1", d => d.source.y)
-                    .attr("x2", d => d.target.x)
-                    .attr("y2", d => d.target.y);
-                linkLabel.attr("transform", d => {
-                    const midX = (d.source.x + d.target.x) / 2;
-                    const midY = (d.source.y + d.target.y) / 2;
-                    const dx = d.target.x - d.source.x;
-                    const dy = d.target.y - d.source.y;
-                    const len = Math.sqrt(dx * dx + dy * dy) || 1;
-                    const perpX = -dy / len;
-                    const perpY = dx / len;
-                    const offset = d._labelOffset || 0;
-                    return ` + "`" + `translate(${midX + perpX * offset},${midY + perpY * offset})` + "`" + `;
-                });
+                // Update all edge positions
+                updateEdgePositions();
                 node.attr("transform", d => ` + "`" + `translate(${d.x},${d.y})` + "`" + `);
                 // Update cluster hulls
                 updateHulls();
@@ -1517,38 +1731,105 @@ const htmlTemplate = `<!DOCTYPE html>
             .on("end", dragended);
     }
 
-    // Update positions on tick
-    simulation.on("tick", () => {
-        // Update cluster hulls first (so they're behind everything)
-        updateHulls();
+    // Helper to get node position by id
+    const nodeById = new Map(graphData.nodes.map(n => [n.id, n]));
 
+    function getNodePos(nodeIdOrObj) {
+        if (typeof nodeIdOrObj === 'object') return { x: nodeIdOrObj.x, y: nodeIdOrObj.y };
+        const node = nodeById.get(nodeIdOrObj);
+        return node ? { x: node.x, y: node.y } : { x: 0, y: 0 };
+    }
+
+    // Helper to compute quadratic bezier curve path with shortened endpoints
+    function computeCurvedPath(sourcePos, targetPos, curveDirection, curveOffset) {
+        const dx = targetPos.x - sourcePos.x;
+        const dy = targetPos.y - sourcePos.y;
+        const len = Math.sqrt(dx * dx + dy * dy) || 1;
+
+        // Unit vector along the line
+        const ux = dx / len;
+        const uy = dy / len;
+
+        // Perpendicular unit vector
+        const perpX = -uy;
+        const perpY = ux;
+
+        // Shorten endpoints to stop at node edge (node radius ~25px)
+        const nodeRadius = 25;
+        const startX = sourcePos.x + ux * nodeRadius;
+        const startY = sourcePos.y + uy * nodeRadius;
+        const endX = targetPos.x - ux * nodeRadius;
+        const endY = targetPos.y - uy * nodeRadius;
+
+        // Midpoint of shortened line
+        const midX = (startX + endX) / 2;
+        const midY = (startY + endY) / 2;
+
+        // Control point offset perpendicular to the line
+        const ctrlX = midX + perpX * curveOffset * curveDirection;
+        const ctrlY = midY + perpY * curveOffset * curveDirection;
+
+        return ` + "`" + `M${startX},${startY} Q${ctrlX},${ctrlY} ${endX},${endY}` + "`" + `;
+    }
+
+    // Function to update all edge positions
+    function updateEdgePositions() {
+        // Update single-edge links
         link
             .attr("x1", d => d.source.x)
             .attr("y1", d => d.source.y)
             .attr("x2", d => d.target.x)
             .attr("y2", d => d.target.y);
 
-        // Position link labels with offset perpendicular to the edge
+        // Update unified links for multi-edge groups
+        unifiedLinks.each(function(group) {
+            const nodeA = getNodePos(group.nodeA);
+            const nodeB = getNodePos(group.nodeB);
+            d3.select(this)
+                .attr("x1", nodeA.x)
+                .attr("y1", nodeA.y)
+                .attr("x2", nodeB.x)
+                .attr("y2", nodeB.y);
+        });
+
+        // Update curved edges
+        curvedEdges.forEach(({ link, path, curveDirection, curveOffset }) => {
+            const sourcePos = getNodePos(link.source);
+            const targetPos = getNodePos(link.target);
+            path.attr("d", computeCurvedPath(sourcePos, targetPos, curveDirection, curveOffset));
+        });
+
+        // Position single-edge labels at midpoint
         linkLabel.attr("transform", d => {
             const midX = (d.source.x + d.target.x) / 2;
             const midY = (d.source.y + d.target.y) / 2;
-
-            // Calculate perpendicular offset
-            const dx = d.target.x - d.source.x;
-            const dy = d.target.y - d.source.y;
-            const len = Math.sqrt(dx * dx + dy * dy) || 1;
-
-            // Perpendicular unit vector
-            const perpX = -dy / len;
-            const perpY = dx / len;
-
-            // Apply offset
-            const offset = d._labelOffset || 0;
-            const offsetX = midX + perpX * offset;
-            const offsetY = midY + perpY * offset;
-
-            return ` + "`" + `translate(${offsetX},${offsetY})` + "`" + `;
+            return ` + "`" + `translate(${midX},${midY})` + "`" + `;
         });
+
+        // Position multi-edge label groups (stacked vertically at midpoint)
+        multiEdgeLabelContainers.forEach(({ container, labels, group }) => {
+            const nodeA = getNodePos(group.nodeA);
+            const nodeB = getNodePos(group.nodeB);
+            const midX = (nodeA.x + nodeB.x) / 2;
+            const midY = (nodeA.y + nodeB.y) / 2;
+
+            // Count labels with content
+            const labelCount = labels.size();
+            const lineHeight = 14;
+            const startY = -(labelCount - 1) * lineHeight / 2;
+
+            container.attr("transform", ` + "`" + `translate(${midX},${midY})` + "`" + `);
+            labels.attr("y", (d, i) => startY + i * lineHeight);
+        });
+    }
+
+    // Update positions on tick
+    simulation.on("tick", () => {
+        // Update cluster hulls first (so they're behind everything)
+        updateHulls();
+
+        // Update all edge positions
+        updateEdgePositions();
 
         node.attr("transform", d => ` + "`" + `translate(${d.x},${d.y})` + "`" + `);
     });
